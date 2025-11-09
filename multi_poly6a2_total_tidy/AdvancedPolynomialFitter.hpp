@@ -34,6 +34,8 @@ public:
     std::vector<float> levenbergMarquardt(std::vector<float>& coeffs, const std::vector<float>& x, const std::vector<float>& y, int degree);
     std::vector<float> levenbergMarquardtD(std::vector<float>& coeffs, const std::vector<double>& x, const std::vector<float>& y, int degree);
 
+    std::vector<float> composePolynomials(const float* p1_coeffs, double p1_delta, const float* p2_coeffs, double p2_delta, int degree);
+
 private:
     std::vector<double> solveLinearSystem(std::vector<std::vector<double>>& A, std::vector<double>& b);
     std::vector<double> solveQR(std::vector<std::vector<double>>& A, std::vector<double>& b); 

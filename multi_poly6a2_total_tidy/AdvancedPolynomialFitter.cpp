@@ -280,6 +280,68 @@ using namespace Eigen;
         return x;
     }
 
+// Helper function for combinations
+static double combinations(int n, int k) {
+    if (k < 0 || k > n) {
+        return 0;
+    }
+    if (k == 0 || k == n) {
+        return 1;
+    }
+    if (k > n / 2) {
+        k = n - k;
+    }
+    double res = 1;
+    for (int i = 1; i <= k; ++i) {
+        res = res * (n - i + 1) / i;
+    }
+    return res;
+}
+
+std::vector<float> AdvancedPolynomialFitter::composePolynomials(const float* p1_coeffs, double p1_delta, const float* p2_coeffs, double p2_delta, int degree) {
+    double total_delta = p1_delta + p2_delta;
+    if (total_delta <= 0) {
+        return std::vector<float>(degree + 1, 0.0f);
+    }
+
+    double w1 = p1_delta / total_delta;
+    double w2 = 1.0 - w1;
+
+    int m = degree + 1;
+    std::vector<std::vector<double>> M(m, std::vector<double>(m));
+    std::vector<double> b(m, 0.0);
+
+    for (int i = 0; i < m; ++i) {
+        for (int j = 0; j < m; ++j) {
+            M[i][j] = 1.0 / (i + j + 1.0);
+        }
+    }
+
+    for (int j = 0; j < m; ++j) {
+        double b1_sum = 0;
+        for (int k = 0; k < m; ++k) {
+            b1_sum += p1_coeffs[k] / (k + j + 1.0);
+        }
+        double b1 = std::pow(w1, j + 1) * b1_sum;
+
+        double b2_sum = 0;
+        for (int k = 0; k < m; ++k) {
+            double inner_sum = 0;
+            for (int l = 0; l <= j; ++l) {
+                inner_sum += combinations(j, l) * std::pow(w1, j - l) * std::pow(w2, l) / (k + l + 1.0);
+            }
+            b2_sum += p2_coeffs[k] * inner_sum;
+        }
+        double b2 = w2 * b2_sum;
+
+        b[j] = b1 + b2;
+    }
+
+    std::vector<double> new_coeffs_double = solveQR(M, b);
+
+    return std::vector<float>(new_coeffs_double.begin(), new_coeffs_double.end());
+}
+
 
 
 

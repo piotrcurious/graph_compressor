@@ -271,53 +271,17 @@ static double evaluatePolynomial(const float *coefficients, uint8_t degree, doub
 // Modified combinePolynomials function
 static void combinePolynomials(const PolynomialSegment &oldest, const PolynomialSegment &secondOldest, PolynomialSegment &recompressedSegment) {
     AdvancedPolynomialFitter fitter;
-    #define MEMORY_LIMIT 1500
     uint16_t currentPolyIndex = 0;
 
-    for (uint16_t i = 0; i < POLY_COUNT; i=i+2) {
+    for (uint16_t i = 0; i < POLY_COUNT; i = i + 2) {
         if (oldest.timeDeltas[i] == 0 || oldest.timeDeltas[i+1] == 0) break;
-        
-        std::vector<double> timestamps;
-        std::vector<float> values;
+
         double combinedTimeDelta = oldest.timeDeltas[i] + oldest.timeDeltas[i+1];
-        double RECOMPRESS_RESOLUTION = combinedTimeDelta/MEMORY_LIMIT;
-        Serial.print("resolution:");Serial.println(RECOMPRESS_RESOLUTION);
-        Serial.print("delta");Serial.println(combinedTimeDelta);
-        // Sample points from first polynomial
-        double tStart = 0;
-        for (double t = 0; t <= oldest.timeDeltas[i]; t += RECOMPRESS_RESOLUTION) {
-            // Use normalized time for polynomial evaluation
-            double tNorm1 = normalizeTime(t, oldest.timeDeltas[i]);
-            // But normalize the timestamp for the new combined polynomial
-            timestamps.push_back(normalizeTime(tStart + t, combinedTimeDelta));
-            values.push_back(evaluatePolynomialNormalized(oldest.coefficients[i], POLY_DEGREE+1, tNorm1));
-        }
-            double t = oldest.timeDeltas[i]; // make sure last datapoint is stored
-            double tNorm1 = normalizeTime(t, oldest.timeDeltas[i]);
-            // But normalize the timestamp for the new combined polynomial
-            timestamps.push_back(normalizeTime(tStart + t, combinedTimeDelta));
-            values.push_back(evaluatePolynomialNormalized(oldest.coefficients[i], POLY_DEGREE+1, tNorm1));
 
-        // Sample points from second polynomial
-        tStart += oldest.timeDeltas[i];
-        for (double t = 0; t <= oldest.timeDeltas[i+1]; t += RECOMPRESS_RESOLUTION) {
-            double tNorm2 = normalizeTime(t, oldest.timeDeltas[i+1]);
-            timestamps.push_back(normalizeTime(tStart + t, combinedTimeDelta));
-            values.push_back(evaluatePolynomialNormalized(oldest.coefficients[i+1], POLY_DEGREE+1, tNorm2));
-        }
-            t = oldest.timeDeltas[i+1]; // make sure last datapoint is stored
-            double tNorm2 = normalizeTime(t, oldest.timeDeltas[i+1]);
-            // But normalize the timestamp for the new combined polynomial
-            timestamps.push_back(normalizeTime(tStart + t, combinedTimeDelta));
-            values.push_back(evaluatePolynomialNormalized(oldest.coefficients[i+1], POLY_DEGREE+1, tNorm2));
+        std::vector<float> newCoefficients = fitter.composePolynomials(oldest.coefficients[i], oldest.timeDeltas[i], oldest.coefficients[i+1], oldest.timeDeltas[i+1], POLY_DEGREE);
 
-        // Fit new polynomial in normalized space
-//        std::vector<float> newCoefficients = fitter.fitPolynomialD(timestamps, values, POLY_DEGREE, AdvancedPolynomialFitter::NONE);
-        std::vector<float> newCoefficients = fitter.fitPolynomialD_superpos5c(timestamps, values, POLY_DEGREE, AdvancedPolynomialFitter::LEVENBERG_MARQUARDT);
-
-
-        // Store coefficients (already for normalized domain)
-        for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE+1; j++) {
+        // Store coefficients
+        for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE + 1; j++) {
             recompressedSegment.coefficients[currentPolyIndex][j] = newCoefficients[j];
         }
 
@@ -326,44 +290,14 @@ static void combinePolynomials(const PolynomialSegment &oldest, const Polynomial
     }
 
     // Handle second oldest segment similarly
-    for (uint16_t i = 0; i < POLY_COUNT; i=i+2) {
+    for (uint16_t i = 0; i < POLY_COUNT; i = i + 2) {
         if (secondOldest.timeDeltas[i] == 0 || secondOldest.timeDeltas[i+1] == 0) break;
         
-        std::vector<double> timestamps;
-        std::vector<float> values;
         double combinedTimeDelta = secondOldest.timeDeltas[i] + secondOldest.timeDeltas[i+1];
-        double RECOMPRESS_RESOLUTION = combinedTimeDelta/MEMORY_LIMIT;
 
-        double tStart = 0;
-        for (double t = 0; t <= secondOldest.timeDeltas[i]; t += RECOMPRESS_RESOLUTION) {
-            double tNorm1 = normalizeTime(t, secondOldest.timeDeltas[i]);
-            timestamps.push_back(normalizeTime(tStart + t, combinedTimeDelta));
-            values.push_back(evaluatePolynomialNormalized(secondOldest.coefficients[i], POLY_DEGREE+1, tNorm1));
-        }
-            double t = secondOldest.timeDeltas[i]; // make sure last datapoint is stored
-            double tNorm1 = normalizeTime(t, secondOldest.timeDeltas[i]);
-            // But normalize the timestamp for the new combined polynomial
-            timestamps.push_back(normalizeTime(tStart + t, combinedTimeDelta));
-            values.push_back(evaluatePolynomialNormalized(secondOldest.coefficients[i], POLY_DEGREE+1, tNorm1));
+        std::vector<float> newCoefficients = fitter.composePolynomials(secondOldest.coefficients[i], secondOldest.timeDeltas[i], secondOldest.coefficients[i+1], secondOldest.timeDeltas[i+1], POLY_DEGREE);
 
-
-        tStart += secondOldest.timeDeltas[i];
-        for (double t = 0; t <= secondOldest.timeDeltas[i+1]; t += RECOMPRESS_RESOLUTION) {
-            double tNorm2 = normalizeTime(t, secondOldest.timeDeltas[i+1]);
-            timestamps.push_back(normalizeTime(tStart + t, combinedTimeDelta));
-            values.push_back(evaluatePolynomialNormalized(secondOldest.coefficients[i+1], POLY_DEGREE+1, tNorm2));
-        }
-
-            t = secondOldest.timeDeltas[i+1]; // make sure last datapoint is stored
-            double tNorm2 = normalizeTime(t, secondOldest.timeDeltas[i+1]);
-            // But normalize the timestamp for the new combined polynomial
-            timestamps.push_back(normalizeTime(tStart + t, combinedTimeDelta));
-            values.push_back(evaluatePolynomialNormalized(secondOldest.coefficients[i+1], POLY_DEGREE+1, tNorm2));
-
-//        std::vector<float> newCoefficients = fitter.fitPolynomialD(timestamps, values, POLY_DEGREE, AdvancedPolynomialFitter::NONE);
-        std::vector<float> newCoefficients = fitter.fitPolynomialD_superpos5c(timestamps, values, POLY_DEGREE, AdvancedPolynomialFitter::LEVENBERG_MARQUARDT);
-
-        for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE+1; j++) {
+        for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE + 1; j++) {
             recompressedSegment.coefficients[currentPolyIndex][j] = newCoefficients[j];
         }
 
