@@ -340,4 +340,63 @@ std::vector<float> AdvancedPolynomialFitter::composePolynomials(const float* p1_
     };
     std::vector<Inequality> inequalities;
     // Determine which source extremum is min or max by inspecting original second derivative sign
-    for (double
+    for (double x : kept_x) {
+        double fpp = eval_fpp_global(x);
+        bool is_min = (fpp > 0.0); // positive second derivative in original => minimum
+        std::vector<double> row(m, 0.0);
+        // fill row
+        for (int k = 2; k < m; ++k) row[k] = double(k) * double(k - 1) * std::pow(x, double(k - 2));
+        inequalities.push_back({row, 0.0, is_min, x});
+    }
+
+    // Active-set loop: iteratively add the most-violated inequality as equality until all satisfied or capacity reached
+    const int max_active_iters = m; // can't add more than m active inequalities (practical cap)
+    for (int iter = 0; iter < max_active_iters; ++iter) {
+        // check inequalities
+        double worst_violation = 0.0;
+        int worst_idx = -1;
+        double tol_violation = 1e-12;
+        for (int i = 0; i < (int)inequalities.size(); ++i) {
+            const auto& ineq = inequalities[i];
+            // compute a^T c - bound
+            double lhs = 0.0;
+            for (int k = 0; k < m; ++k) lhs += ineq.row[k] * double(c(k));
+            double violation = 0.0;
+            if (ineq.require_positive) {
+                // want lhs >= 0 ; violation if lhs < 0 -> amount = -lhs
+                violation = std::min(0.0, lhs - ineq.bound);
+                violation = -violation; // positive amount if violated
+            } else {
+                // want lhs <= 0 ; violation if lhs > 0
+                violation = std::max(0.0, lhs - ineq.bound);
+            }
+            if (violation > worst_violation + 1e-20) {
+                worst_violation = violation;
+                worst_idx = i;
+            }
+        }
+        if (worst_idx == -1 || worst_violation <= tol_violation) break; // all satisfied
+
+        // Add worst inequality as equality to C_eq (append)
+        C_eq.push_back(inequalities[worst_idx].row);
+        d_eq.push_back(inequalities[worst_idx].bound);
+        // Remove that inequality from list (so we don't re-add)
+        inequalities.erase(inequalities.begin() + worst_idx);
+
+        // If equalities exceed capacity (>= m), stop adding and return current solution (safest)
+        if ((int)C_eq.size() >= m) break;
+
+        // resolve equality-constrained QP
+        auto res2 = solve_eq_constrained(C_eq, d_eq);
+        if (!res2.first) {
+            // if solver failed, fallback to previous c
+            break;
+        }
+        c = res2.second;
+    }
+
+    // Done: c holds coefficients
+    std::vector<float> out(m);
+    for (int i = 0; i < m; ++i) out[i] = static_cast<float>(c(i));
+    return out;
+}
