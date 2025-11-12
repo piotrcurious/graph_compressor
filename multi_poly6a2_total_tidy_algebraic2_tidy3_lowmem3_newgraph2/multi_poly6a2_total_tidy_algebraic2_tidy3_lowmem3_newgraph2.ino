@@ -10,11 +10,13 @@ TFT_eSPI tft = TFT_eSPI();
 DataCompressor dataCompressor;
 
 #define SCREEN_WIDTH 320
+#include "DataCompressor.hpp"
+
 #define SCREEN_HEIGHT 240
 #define MAX_RAW_DATA 1440 // Defines the maximum number of raw data points to store for visualization.
 
 // Buffer to hold raw data for the purpose of displaying it on the screen alongside the compressed data.
-static float    raw_Data[MAX_RAW_DATA];
+static float    raw_Data[MAX_RAW_DATA][NUM_DATA_SERIES];
 static uint32_t raw_timestamps[MAX_RAW_DATA];
 static uint16_t raw_dataIndex = 0;
 
@@ -28,15 +30,19 @@ DataVisualizer dataVisualizer(tft, dataCompressor, raw_Data, raw_timestamps, raw
 /**
  * @brief Logs raw data into a circular buffer for visualization.
  */
-static void raw_logSampledData(float data, uint32_t currentTimestamp) {
+static void raw_logSampledData(const float* data, uint32_t currentTimestamp) {
     if (raw_dataIndex >= MAX_RAW_DATA) {
         for (uint16_t i = 0; i < MAX_RAW_DATA - 1; i++) {
-            raw_Data[i] = raw_Data[i + 1];
+            for (int j = 0; j < NUM_DATA_SERIES; ++j) {
+                raw_Data[i][j] = raw_Data[i + 1][j];
+            }
             raw_timestamps[i] = raw_timestamps[i + 1];
         }
         raw_dataIndex = MAX_RAW_DATA - 1;
     }
-    raw_Data[raw_dataIndex] = data;
+    for (int j = 0; j < NUM_DATA_SERIES; ++j) {
+        raw_Data[raw_dataIndex][j] = data[j];
+    }
     raw_timestamps[raw_dataIndex] = currentTimestamp;
     raw_dataIndex++;
 }
@@ -44,11 +50,9 @@ static void raw_logSampledData(float data, uint32_t currentTimestamp) {
 /**
  * @brief Generates simulated sample data.
  */
-static float sampleScalarData(uint32_t timestamp) {
-    float scalar = sin((float)timestamp * 0.0002) * 50.0;
-    scalar += sin((float)timestamp * 0.001) * 20.0;
-    scalar += sin((float)timestamp * 0.005) * 10.0;
-    return scalar;
+static void sampleVectorData(uint32_t timestamp, float* outData) {
+    outData[0] = sin((float)timestamp * 0.0002) * 50.0 + sin((float)timestamp * 0.001) * 20.0 + sin((float)timestamp * 0.005) * 10.0;
+    outData[1] = cos((float)timestamp * 0.0003) * 40.0 + sin((float)timestamp * 0.0015) * 15.0 + cos((float)timestamp * 0.006) * 12.0;
 }
 
 // =================================================================================================
@@ -67,7 +71,8 @@ void loop() {
     // Simulate sampling data at random intervals.
     delay(random(50, 200));
     uint32_t currentTimestamp = millis();
-    float sampledData = sampleScalarData(currentTimestamp);
+    float sampledData[NUM_DATA_SERIES];
+    sampleVectorData(currentTimestamp, sampledData);
 
     // Log the data with the compressor.
     dataCompressor.logSampledData(sampledData, currentTimestamp);

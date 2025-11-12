@@ -14,6 +14,7 @@
 // This is useful for memory-constrained devices, but may have a slight impact on accuracy.
 // #define USE_LOW_MEMORY_FITTER
 
+#define NUM_DATA_SERIES 2           // The number of data series to be processed.
 #define POLY_COUNT 8                // Number of polynomials in each segment.
 #define SEGMENTS 2                  // Total number of segments in the circular buffer.
 #define POLY_DEGREE 5               // The degree of the polynomials used for storing compressed data.
@@ -30,7 +31,7 @@
 
 // Represents a segment of the compressed data, containing multiple polynomials.
 struct PolynomialSegment {
-    float coefficients[POLY_COUNT][POLY_DEGREE + 1]; // Coefficients for each polynomial.
+    float coefficients[POLY_COUNT][NUM_DATA_SERIES][POLY_DEGREE + 1]; // Coefficients for each polynomial.
     uint32_t timeDeltas[POLY_COUNT];                   // Time duration of each polynomial in milliseconds.
 };
 
@@ -56,10 +57,10 @@ public:
     /**
      * @brief Logs a new data sample.
      * When enough samples have been collected, it triggers the polynomial fitting process.
-     * @param data The float value of the data sample.
+     * @param data An array of float values representing the data samples.
      * @param currentTimestamp The timestamp of the data sample in milliseconds.
      */
-    void logSampledData(float data, uint32_t currentTimestamp);
+    void logSampledData(const float* data, uint32_t currentTimestamp);
 
     // --- Getters for accessing compressed data ---
     // These are primarily used for visualization and debugging.
@@ -78,7 +79,7 @@ private:
     bool isBufferFull() const;
     void getOldestSegments(PolynomialSegment& oldest, PolynomialSegment& secondOldest) const;
     void removeOldestTwo();
-    void compressDataToSegment(const float* rawData, const uint32_t* timestamps, uint16_t dataSize, float* coefficients, uint32_t& timeDelta);
+    void compressDataToSegment(uint8_t seriesIndex, const uint32_t* timestamps, uint16_t dataSize, float* coefficients, uint32_t& timeDelta);
     void combinePolynomials(const PolynomialSegment& oldest, const PolynomialSegment& secondOldest, PolynomialSegment& recompressedSegment);
     void recompressSegments();
 
@@ -92,7 +93,7 @@ private:
     uint8_t head;                              // The index of the oldest segment in the circular buffer.
 
     // Buffer for accumulating incoming raw data before fitting.
-    float rawDataBuffer[LOG_BUFFER_POINTS_PER_POLY];
+    float rawDataBuffer[LOG_BUFFER_POINTS_PER_POLY][NUM_DATA_SERIES];
     uint32_t timestampsBuffer[LOG_BUFFER_POINTS_PER_POLY];
     uint16_t dataIndex;
 };

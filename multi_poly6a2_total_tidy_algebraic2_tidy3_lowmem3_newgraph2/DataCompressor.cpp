@@ -41,11 +41,13 @@ void DataCompressor::removeOldestTwo() {
 }
 
 
-void DataCompressor::logSampledData(float data, uint32_t currentTimestamp) {
+void DataCompressor::logSampledData(const float* data, uint32_t currentTimestamp) {
     uint32_t timeDelta = (currentTimestamp - lastTimestamp);
     lastTimestamp = currentTimestamp;
 
-    rawDataBuffer[dataIndex] = data;
+    for (int i = 0; i < NUM_DATA_SERIES; ++i) {
+        rawDataBuffer[dataIndex][i] = data[i];
+    }
     timestampsBuffer[dataIndex] = timeDelta;
     dataIndex++;
     raw_log_delta += timeDelta;
@@ -75,13 +77,14 @@ void DataCompressor::logSampledData(float data, uint32_t currentTimestamp) {
             }
         }
 
-        float new_coefficients[POLY_DEGREE+1];
-        uint32_t new_timeDelta;
         uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
-        compressDataToSegment(rawDataBuffer, timestampsBuffer, dataIndex, new_coefficients, new_timeDelta);
-
-        for (uint8_t i = 0; i < POLY_DEGREE+1; i++) {
-            segmentBuffer[tail].coefficients[currentPolyIndex][i] = new_coefficients[i];
+        uint32_t new_timeDelta = 0;
+        for (int i = 0; i < NUM_DATA_SERIES; ++i) {
+            float new_coefficients[POLY_DEGREE + 1];
+            compressDataToSegment(i, timestampsBuffer, dataIndex, new_coefficients, new_timeDelta);
+            for (int j = 0; j < POLY_DEGREE + 1; ++j) {
+                segmentBuffer[tail].coefficients[currentPolyIndex][i][j] = new_coefficients[j];
+            }
         }
         segmentBuffer[tail].timeDeltas[currentPolyIndex] = new_timeDelta;
 
@@ -108,7 +111,7 @@ static double evaluatePolynomial(const float *coefficients, uint8_t degree, doub
     return result;
 }
 
-void DataCompressor::compressDataToSegment(const float* rawData, const uint32_t* timestamps, uint16_t dataSize, float* coefficients, uint32_t& timeDelta) {
+void DataCompressor::compressDataToSegment(uint8_t seriesIndex, const uint32_t* timestamps, uint16_t dataSize, float* coefficients, uint32_t& timeDelta) {
     AdvancedPolynomialFitter fitter;
     int8_t segmentIndex = segmentCount - 1;
     int16_t polyIndex = (int16_t)currentPolyIndex;
@@ -167,13 +170,13 @@ void DataCompressor::compressDataToSegment(const float* rawData, const uint32_t*
         for (uint16_t j = 0; j < dataSize; ++j) {
             tAbs += double(timestamps[j]);
             absTimes[j + preMargin3] = tAbs;
-            values[j + preMargin3] = rawData[j];
+            values[j + preMargin3] = rawDataBuffer[j][seriesIndex];
         }
         int prev_seg_idx = (segmentIndex > 0) ? (segmentIndex - 1) : -1;
         int prev_poly_idx = POLY_COUNT - 1;
         for (int i = 0; i < preMargin3; ++i) {
             double at = absTimes[i];
-            float fallback = rawData[0];
+            float fallback = rawDataBuffer[0][seriesIndex];
             float neighborVal;
             if (polyIndex == 0) neighborVal = eval_previous_poly_at_abs(at, fallback, prev_seg_idx, prev_poly_idx);
             else neighborVal = eval_previous_poly_at_abs(at, fallback, segmentIndex, polyIndex - 1);
@@ -202,7 +205,7 @@ void DataCompressor::compressDataToSegment(const float* rawData, const uint32_t*
         for (uint16_t j = 0; j < dataSize; ++j) {
             tAbs += double(timestamps[j]);
             absTimes[j + preMargin] = tAbs;
-            values[j + preMargin] = rawData[j];
+            values[j + preMargin] = rawDataBuffer[j][seriesIndex];
         }
         double dataEndAbs = tAbs;
         for (int i = 0; i < postMargin; ++i)
@@ -256,10 +259,11 @@ void DataCompressor::combinePolynomials(const PolynomialSegment &oldest, const P
         if (i + 1 >= POLY_COUNT || oldest.timeDeltas[i] == 0 || oldest.timeDeltas[i+1] == 0) break;
 
         double combinedTimeDelta = oldest.timeDeltas[i] + oldest.timeDeltas[i+1];
-        std::vector<float> newCoefficients = fitter.composePolynomials(oldest.coefficients[i], oldest.timeDeltas[i], oldest.coefficients[i+1], oldest.timeDeltas[i+1], POLY_DEGREE);
-
-        for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE + 1; j++) {
-            recompressedSegment.coefficients[currentPolyIndex_local][j] = newCoefficients[j];
+        for (int series = 0; series < NUM_DATA_SERIES; ++series) {
+            std::vector<float> newCoefficients = fitter.composePolynomials(oldest.coefficients[i][series], oldest.timeDeltas[i], oldest.coefficients[i+1][series], oldest.timeDeltas[i+1], POLY_DEGREE);
+            for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE + 1; j++) {
+                recompressedSegment.coefficients[currentPolyIndex_local][series][j] = newCoefficients[j];
+            }
         }
         recompressedSegment.timeDeltas[currentPolyIndex_local] = combinedTimeDelta;
         currentPolyIndex_local++;
@@ -269,10 +273,11 @@ void DataCompressor::combinePolynomials(const PolynomialSegment &oldest, const P
         if (i + 1 >= POLY_COUNT || secondOldest.timeDeltas[i] == 0 || secondOldest.timeDeltas[i+1] == 0) break;
 
         double combinedTimeDelta = secondOldest.timeDeltas[i] + secondOldest.timeDeltas[i+1];
-        std::vector<float> newCoefficients = fitter.composePolynomials(secondOldest.coefficients[i], secondOldest.timeDeltas[i], secondOldest.coefficients[i+1], secondOldest.timeDeltas[i+1], POLY_DEGREE);
-
-        for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE + 1; j++) {
-            recompressedSegment.coefficients[currentPolyIndex_local][j] = newCoefficients[j];
+        for (int series = 0; series < NUM_DATA_SERIES; ++series) {
+            std::vector<float> newCoefficients = fitter.composePolynomials(secondOldest.coefficients[i][series], secondOldest.timeDeltas[i], secondOldest.coefficients[i+1][series], secondOldest.timeDeltas[i+1], POLY_DEGREE);
+            for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE + 1; j++) {
+                recompressedSegment.coefficients[currentPolyIndex_local][series][j] = newCoefficients[j];
+            }
         }
         recompressedSegment.timeDeltas[currentPolyIndex_local] = combinedTimeDelta;
         currentPolyIndex_local++;

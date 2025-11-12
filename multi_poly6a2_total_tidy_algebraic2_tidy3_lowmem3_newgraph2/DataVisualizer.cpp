@@ -4,14 +4,14 @@
 // Constructor
 // =================================================================================================
 
-DataVisualizer::DataVisualizer(TFT_eSPI& tft, DataCompressor& compressor, const float* rawData, const uint32_t* rawTimestamps, const uint16_t& rawDataIndex)
+DataVisualizer::DataVisualizer(TFT_eSPI& tft, DataCompressor& compressor, const float (*rawData)[NUM_DATA_SERIES], const uint32_t* rawTimestamps, const uint16_t& rawDataIndex)
     : tft(tft), compressor(compressor), rawData(rawData), rawTimestamps(rawTimestamps), rawDataIndex(rawDataIndex) {}
 
 // =================================================================================================
 // Private Helper Functions
 // =================================================================================================
 
-inline double DataVisualizer::evaluatePolynomialNormalized(const float *coefficients, uint8_t degree, double tNorm) {
+inline double DataVisualizer::evaluatePolynomialNormalized(const float* coefficients, uint8_t degree, double tNorm, uint8_t seriesIndex) {
     double result = 0.0;
     double tPower = 1.0;
     for (uint8_t i = 0; i < degree; ++i) {
@@ -25,28 +25,28 @@ uint32_t DataVisualizer::getCompressedEndAbs() const {
     return (rawDataIndex > 0) ? (rawTimestamps[rawDataIndex - 1] - compressor.getRawLogDelta()) : 0u;
 }
 
-bool DataVisualizer::rawInterpolatedValueAt(uint32_t timestamp, double &outValue) const {
+bool DataVisualizer::rawInterpolatedValueAt(uint32_t timestamp, uint8_t seriesIndex, double &outValue) const {
     if (rawDataIndex == 0) return false;
-    if (timestamp <= rawTimestamps[0]) { outValue = rawData[0]; return true; }
-    if (timestamp >= rawTimestamps[rawDataIndex - 1]) { outValue = rawData[rawDataIndex - 1]; return true; }
+    if (timestamp <= rawTimestamps[0]) { outValue = rawData[0][seriesIndex]; return true; }
+    if (timestamp >= rawTimestamps[rawDataIndex - 1]) { outValue = rawData[rawDataIndex - 1][seriesIndex]; return true; }
 
     int lo = 0, hi = (int)rawDataIndex - 1;
     while (lo <= hi) {
         int mid = (lo + hi) >> 1;
         uint32_t tm = rawTimestamps[mid];
-        if (tm == timestamp) { outValue = rawData[mid]; return true; }
+        if (tm == timestamp) { outValue = rawData[mid][seriesIndex]; return true; }
         if (tm < timestamp) lo = mid + 1; else hi = mid - 1;
     }
     if (hi >= 0 && hi + 1 < rawDataIndex) {
         uint32_t t0 = rawTimestamps[hi], t1 = rawTimestamps[hi + 1];
         double frac = (t1 == t0) ? 0.0 : double(timestamp - t0) / double(t1 - t0);
-        outValue = rawData[hi] * (1.0 - frac) + rawData[hi + 1] * frac;
+        outValue = rawData[hi][seriesIndex] * (1.0 - frac) + rawData[hi + 1][seriesIndex] * frac;
         return true;
     }
     return false;
 }
 
-bool DataVisualizer::compressedValueAt_inRange(uint32_t ts, double &outValue) const {
+bool DataVisualizer::compressedValueAt_inRange(uint32_t ts, uint8_t seriesIndex, double &outValue) const {
     const PolynomialSegment* segmentBuffer = compressor.getSegmentBuffer();
     uint8_t segmentCount = compressor.getSegmentCount();
     if (segmentCount == 0) return false;
@@ -62,7 +62,7 @@ bool DataVisualizer::compressedValueAt_inRange(uint32_t ts, double &outValue) co
             if (ts >= startAbs && ts < cursor) {
                 double tRel = (double)(ts - startAbs);
                 double tNorm = (dt == 0 ? 0.0 : tRel / (double)dt);
-                outValue = evaluatePolynomialNormalized(seg.coefficients[p], POLY_DEGREE + 1, tNorm);
+                outValue = evaluatePolynomialNormalized(seg.coefficients[p][seriesIndex], POLY_DEGREE + 1, tNorm, seriesIndex);
                 return true;
             }
             cursor = startAbs;
@@ -76,19 +76,21 @@ void DataVisualizer::computeWindowMinMaxDirect(uint32_t wStart, uint32_t wEnd, f
     if (wEnd <= wStart) { outMin = -1; outMax = 1; return; }
     const uint16_t SAMPLES = 80;
     uint32_t compressedEnd = getCompressedEndAbs();
-    for (uint16_t i = 0; i <= SAMPLES; ++i) {
-        uint32_t ts = wStart + (uint64_t)i * (uint64_t)(wEnd - wStart) / SAMPLES;
-        double v;
-        if (ts < compressedEnd && compressedValueAt_inRange(ts, v)) {
-            outMin = min(outMin, (float)v); outMax = max(outMax, (float)v);
-        } else if (rawInterpolatedValueAt(ts, v)) {
-            outMin = min(outMin, (float)v); outMax = max(outMax, (float)v);
+    for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
+        for (uint16_t i = 0; i <= SAMPLES; ++i) {
+            uint32_t ts = wStart + (uint64_t)i * (uint64_t)(wEnd - wStart) / SAMPLES;
+            double v;
+            if (ts < compressedEnd && compressedValueAt_inRange(ts, series, v)) {
+                outMin = min(outMin, (float)v); outMax = max(outMax, (float)v);
+            } else if (rawInterpolatedValueAt(ts, series, v)) {
+                outMin = min(outMin, (float)v); outMax = max(outMax, (float)v);
+            }
         }
-    }
-    for (uint16_t i = 0; i < rawDataIndex; ++i) {
-        uint32_t t = rawTimestamps[i];
-        if (t < wStart || t > wEnd) continue;
-        outMin = min(outMin, rawData[i]); outMax = max(outMax, rawData[i]);
+        for (uint16_t i = 0; i < rawDataIndex; ++i) {
+            uint32_t t = rawTimestamps[i];
+            if (t < wStart || t > wEnd) continue;
+            outMin = min(outMin, rawData[i][series]); outMax = max(outMax, rawData[i][series]);
+        }
     }
     if (isinf(outMin) || isinf(outMax)) { outMin = -1; outMax = 1; }
     float r = outMax - outMin;
@@ -166,32 +168,35 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
         tft.drawFastVLine(xb, ry, rh, TFT_MAGENTA);
     }
 
-    if (compressor.getSegmentCount() > 0) {
-        int lastY = -1;
-        int compressedRightX = tsToX(min(wEnd, compressedEnd));
-        for (int px = 0; px <= compressedRightX - rx; ++px) {
-            uint32_t ts = wStart + (uint64_t)px * (uint64_t)(wEnd - wStart) / (uint32_t)max(1, rw - 1);
-            if (ts >= compressedEnd) break;
-            double v;
-            if (!compressedValueAt_inRange(ts, v)) continue;
-            int x = rx + px;
-            int y = valueToY(v);
-            if (lastY >= 0) tft.drawLine(x-1, lastY, x, y, TFT_YELLOW);
-            else tft.drawPixel(x, y, TFT_YELLOW);
-            lastY = y;
+    uint16_t colors[] = {TFT_YELLOW, TFT_GREEN};
+    for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
+        if (compressor.getSegmentCount() > 0) {
+            int lastY = -1;
+            int compressedRightX = tsToX(min(wEnd, compressedEnd));
+            for (int px = 0; px <= compressedRightX - rx; ++px) {
+                uint32_t ts = wStart + (uint64_t)px * (uint64_t)(wEnd - wStart) / (uint32_t)max(1, rw - 1);
+                if (ts >= compressedEnd) break;
+                double v;
+                if (!compressedValueAt_inRange(ts, series, v)) continue;
+                int x = rx + px;
+                int y = valueToY(v);
+                if (lastY >= 0) tft.drawLine(x - 1, lastY, x, y, colors[series]);
+                else tft.drawPixel(x, y, colors[series]);
+                lastY = y;
+            }
         }
-    }
 
-    if (rawDataIndex > 0) {
-        int prevX = -1, prevY = -1;
-        for (uint16_t i = 0; i < rawDataIndex; ++i) {
-            uint32_t t = rawTimestamps[i];
-            if (t < wStart || t > wEnd) continue;
-            int x = tsToX(t);
-            int y = valueToY(rawData[i]);
-            tft.drawPixel(x, y, TFT_CYAN);
-            if (prevX >= 0) tft.drawLine(prevX, prevY, x, y, TFT_CYAN);
-            prevX = x; prevY = y;
+        if (rawDataIndex > 0) {
+            int prevX = -1, prevY = -1;
+            for (uint16_t i = 0; i < rawDataIndex; ++i) {
+                uint32_t t = rawTimestamps[i];
+                if (t < wStart || t > wEnd) continue;
+                int x = tsToX(t);
+                int y = valueToY(rawData[i][series]);
+                tft.drawPixel(x, y, colors[series]);
+                if (prevX >= 0) tft.drawLine(prevX, prevY, x, y, colors[series]);
+                prevX = x; prevY = y;
+            }
         }
     }
 
