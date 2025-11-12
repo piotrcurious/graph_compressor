@@ -50,39 +50,45 @@ void DataCompressor::logSampledData(float data, uint32_t currentTimestamp) {
     dataIndex++;
     raw_log_delta += timeDelta;
 
-    if (dataIndex >= LOG_BUFFER_POINTS_PER_POLY) {
+   if (dataIndex >= LOG_BUFFER_POINTS_PER_POLY) {
         if (segmentCount == 0) {
+           addSegment(PolynomialSegment());
+            currentPolyIndex = 0 ;
+            for (uint16_t i = 0; i < POLY_COUNT; i++) {
+                uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
+                segmentBuffer[tail].timeDeltas[i] = 0;
+            }
+        }
+
+        if (currentPolyIndex >= POLY_COUNT) {
+            if (isBufferFull()) {
+                recompressSegments();
+            } else {
+                Serial.print("Created new segment ");
+                Serial.println(segmentCount);
+            }
             addSegment(PolynomialSegment());
             currentPolyIndex = 0;
             for (uint16_t i = 0; i < POLY_COUNT; i++) {
-                segmentBuffer[segmentCount - 1].timeDeltas[i] = 0;
+                uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
+                segmentBuffer[tail].timeDeltas[i] = 0;
             }
         }
 
-        if (currentPolyIndex >= POLY_COUNT -1) {
-            if (segmentCount < SEGMENTS) {
-                addSegment(PolynomialSegment());
-                currentPolyIndex = 0;
-                for (uint16_t i = 0; i < POLY_COUNT; i++) {
-                    segmentBuffer[segmentCount - 1].timeDeltas[i] = 0;
-                }
-            } else {
-                recompressSegments();
-                currentPolyIndex = 0;
-                for (uint16_t i = 0; i < POLY_COUNT; i++) {
-                    segmentBuffer[segmentCount - 1].timeDeltas[i] = 0;
-                }
-            }
-        }
-
-        float new_coefficients[POLY_DEGREE + 1];
+        float new_coefficients[POLY_DEGREE+1];
         uint32_t new_timeDelta;
+        uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
         compressDataToSegment(rawDataBuffer, timestampsBuffer, dataIndex, new_coefficients, new_timeDelta);
 
-        for (uint8_t i = 0; i < POLY_DEGREE + 1; i++) {
-            segmentBuffer[segmentCount - 1].coefficients[currentPolyIndex][i] = new_coefficients[i];
+        for (uint8_t i = 0; i < POLY_DEGREE+1; i++) {
+            segmentBuffer[tail].coefficients[currentPolyIndex][i] = new_coefficients[i];
         }
-        segmentBuffer[segmentCount - 1].timeDeltas[currentPolyIndex] = new_timeDelta;
+        segmentBuffer[tail].timeDeltas[currentPolyIndex] = new_timeDelta;
+
+        Serial.print("Added polynomial ");
+        Serial.print(currentPolyIndex);
+        Serial.print(" to segment ");
+        Serial.println(segmentCount - 1);
 
         currentPolyIndex++;
         raw_log_delta = 0;
@@ -178,7 +184,7 @@ void DataCompressor::compressDataToSegment(const float* rawData, const uint32_t*
 #ifdef USE_LOW_MEMORY_FITTER
         std::vector<float> fitted_sub_abs = fitter.fitPolynomialD_lowmem(absTimes, values, SUB_FIT_POLY_DEGREE, 0.0);
 #else
-        std::vector<float> fitted_sub_abs = fitter.fitPolynomialD(absTimes, values, SUB_FIT_POLY_DEGREE, AdvancedPolynomialFitter::NONE);
+        std::vector<float> fitted_sub_abs = fitter.fitPolynomialD_superpos5c(absTimes, values, SUB_FIT_POLY_DEGREE, AdvancedPolynomialFitter::NONE);
 #endif
         std::vector<float> fitted_sub_norm = convertAbsToNormalized(fitted_sub_abs);
         for (size_t k = 0; k < fitted_sub_norm.size() && k < (SUB_FIT_POLY_DEGREE + 1); ++k) {
@@ -231,7 +237,7 @@ void DataCompressor::compressDataToSegment(const float* rawData, const uint32_t*
 #ifdef USE_LOW_MEMORY_FITTER
         std::vector<float> fitted_abs = fitter.fitPolynomialD_lowmem(absTimes, values, POLY_DEGREE, 0.0);
 #else
-        std::vector<float> fitted_abs = fitter.fitPolynomialD(absTimes, values, POLY_DEGREE, AdvancedPolynomialFitter::NONE);
+        std::vector<float> fitted_abs = fitter.fitPolynomialD_superpos5c(absTimes, values, POLY_DEGREE, AdvancedPolynomialFitter::NONE);
 #endif
         std::vector<float> fitted_norm = convertAbsToNormalized(fitted_abs);
         for (size_t k = 0; k < fitted_norm.size() && k < (POLY_DEGREE + 1); ++k) {
@@ -286,8 +292,18 @@ void DataCompressor::recompressSegments() {
 
     combinePolynomials(oldest, secondOldest, recompressedSegment);
 
-    // The recompression logic creates one new segment from two old ones.
-    // So we remove two and add one.
-    removeOldestTwo();
-    addSegment(recompressedSegment);
+    // Shift the remaining segments to the left
+    for (uint8_t i = 0; i < segmentCount - 2; i++) {
+        segmentBuffer[(head + i) % SEGMENTS] = segmentBuffer[(head + i + 2) % SEGMENTS];
+    }
+
+    // Add the recompressed segment at the end of the valid data
+    segmentBuffer[(head + segmentCount - 2) % SEGMENTS] = recompressedSegment;
+
+    // Decrease the segment count by one
+    segmentCount--;
+    Serial.print("Recompressed. New segment count: ");
+    Serial.println(segmentCount);
+    Serial.print("poly size: ");
+    Serial.print(sizeof(segmentBuffer));
 }
