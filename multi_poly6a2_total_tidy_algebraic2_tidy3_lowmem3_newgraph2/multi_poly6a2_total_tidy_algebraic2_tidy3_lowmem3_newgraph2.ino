@@ -10,8 +10,6 @@ TFT_eSPI tft = TFT_eSPI();
 DataCompressor dataCompressor;
 
 #define SCREEN_WIDTH 320
-#include "DataCompressor.hpp"
-
 #define SCREEN_HEIGHT 240
 #define MAX_RAW_DATA 1440 // Defines the maximum number of raw data points to store for visualization.
 
@@ -20,7 +18,7 @@ static float    raw_Data[MAX_RAW_DATA][NUM_DATA_SERIES];
 static uint32_t raw_timestamps[MAX_RAW_DATA];
 static uint16_t raw_dataIndex = 0;
 
-DataVisualizer dataVisualizer(tft, dataCompressor, raw_Data, raw_timestamps, raw_dataIndex);
+DataVisualizer dataVisualizer(tft, dataCompressor, (const float (*)[NUM_DATA_SERIES])raw_Data, raw_timestamps, raw_dataIndex);
 
 
 // =================================================================================================

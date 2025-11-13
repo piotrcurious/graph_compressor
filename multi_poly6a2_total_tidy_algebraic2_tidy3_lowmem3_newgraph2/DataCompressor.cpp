@@ -145,7 +145,7 @@ void DataCompressor::compressDataToSegment(uint8_t seriesIndex, const uint32_t* 
         if (t_local < 0.0) t_local = 0.0;
         if (t_local > double(prev_duration)) t_local = double(prev_duration);
         float tNorm = normalizeTime((uint32_t)std::lround(t_local), prev_duration);
-        return evaluatePolynomial(segmentBuffer[prev_seg_idx].coefficients[prev_poly_idx], POLY_DEGREE+1, tNorm);
+        return evaluatePolynomial(segmentBuffer[prev_seg_idx].coefficients[prev_poly_idx][seriesIndex], POLY_DEGREE+1, tNorm);
     };
 
     auto eval_next_poly_at_abs = [&](double abs_t, float fallback, int next_seg_idx, int next_poly_idx)->float {
@@ -157,7 +157,7 @@ void DataCompressor::compressDataToSegment(uint8_t seriesIndex, const uint32_t* 
         if (t_local < 0.0) t_local = 0.0;
         if (t_local > double(next_duration)) t_local = double(next_duration);
         float tNorm = normalizeTime((uint32_t)std::lround(t_local), next_duration);
-        return evaluatePolynomial(segmentBuffer[next_seg_idx].coefficients[next_poly_idx], POLY_DEGREE+1, tNorm);
+        return evaluatePolynomial(segmentBuffer[next_seg_idx].coefficients[next_poly_idx][seriesIndex], POLY_DEGREE+1, tNorm);
     };
 
     {
