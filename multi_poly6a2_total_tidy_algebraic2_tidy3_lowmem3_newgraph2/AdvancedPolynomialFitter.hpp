@@ -2,10 +2,15 @@
 #define ADVANCED_POLYNOMIAL_FITTER_H
 
 #include <Arduino.h>
-//#include <Eigen/Dense>
+#if __has_include(<ArduinoEigenDense.h>)
 #include <ArduinoEigenDense.h>
+#else
+#include <Eigen/Dense>
+#endif
 #include <vector>
-#include <ArduinoEigen.h> 
+#if __has_include(<ArduinoEigen.h>)
+#include <ArduinoEigen.h>
+#endif
 
 // Constants for composePolynomials
 namespace {
