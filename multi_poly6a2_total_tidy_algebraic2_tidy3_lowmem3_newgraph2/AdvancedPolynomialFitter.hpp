@@ -7,6 +7,25 @@
 #include <vector>
 #include <ArduinoEigen.h> 
 
+// Constants for composePolynomials
+namespace {
+    const double kEps = 1e-15;
+    const double kRootTol = 1e-12;
+    const double kImagTol = 1e-9;
+    const double kLeadCoeffTol = 1e-30;
+    const double kFuzzyBoundary = 1e-15;
+    const double kFeasTol = 1e-8;
+}
+
+// Debug print macro
+#if defined(ARDUINO)
+#include <Arduino.h>
+#define DEBUG_PRINT(...) do { if (Serial) Serial.printf(__VA_ARGS__); } while(0)
+#else
+#include <stdio.h>
+#define DEBUG_PRINT(...) do { printf(__VA_ARGS__); } while(0)
+#endif
+
 class AdvancedPolynomialFitter {
 public:
     enum OptimizationMethod {
