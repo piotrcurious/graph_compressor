@@ -11,7 +11,7 @@ DataVisualizer::DataVisualizer(TFT_eSPI& tft, DataCompressor& compressor, const 
 // Private Helper Functions
 // =================================================================================================
 
-inline double DataVisualizer::evaluatePolynomialNormalized(const float* coefficients, uint8_t degree, double tNorm, uint8_t seriesIndex) {
+inline double DataVisualizer::evaluatePolynomialNormalized(const float* coefficients, uint8_t degree, double tNorm) {
     double result = 0.0;
     double tPower = 1.0;
     for (uint8_t i = 0; i < degree; ++i) {
@@ -21,24 +21,33 @@ inline double DataVisualizer::evaluatePolynomialNormalized(const float* coeffici
     return result;
 }
 
-uint32_t DataVisualizer::getCompressedEndAbs() const {
-    return (rawDataIndex > 0) ? (rawTimestamps[rawDataIndex - 1] - compressor.getRawLogDelta()) : 0u;
+uint64_t DataVisualizer::getCompressedEndAbs() const {
+    uint64_t last_ts = compressor.getLastTimestamp();
+    uint64_t rollovers = compressor.getRolloverCount();
+    uint64_t total_millis = (rollovers << 32) | last_ts;
+    return total_millis - compressor.getRawLogDelta();
 }
 
-bool DataVisualizer::rawInterpolatedValueAt(uint32_t timestamp, uint8_t seriesIndex, double &outValue) const {
+bool DataVisualizer::rawInterpolatedValueAt(uint64_t timestamp, uint8_t seriesIndex, double &outValue) const {
     if (rawDataIndex == 0) return false;
-    if (timestamp <= rawTimestamps[0]) { outValue = rawData[0][seriesIndex]; return true; }
-    if (timestamp >= rawTimestamps[rawDataIndex - 1]) { outValue = rawData[rawDataIndex - 1][seriesIndex]; return true; }
+
+    uint64_t current_rollovers = compressor.getRolloverCount();
+    uint64_t first_ts = (current_rollovers << 32) | rawTimestamps[0];
+    uint64_t last_ts = (current_rollovers << 32) | rawTimestamps[rawDataIndex - 1];
+
+    if (timestamp <= first_ts) { outValue = rawData[0][seriesIndex]; return true; }
+    if (timestamp >= last_ts) { outValue = rawData[rawDataIndex - 1][seriesIndex]; return true; }
 
     int lo = 0, hi = (int)rawDataIndex - 1;
     while (lo <= hi) {
         int mid = (lo + hi) >> 1;
-        uint32_t tm = rawTimestamps[mid];
+        uint64_t tm = (current_rollovers << 32) | rawTimestamps[mid];
         if (tm == timestamp) { outValue = rawData[mid][seriesIndex]; return true; }
         if (tm < timestamp) lo = mid + 1; else hi = mid - 1;
     }
     if (hi >= 0 && hi + 1 < rawDataIndex) {
-        uint32_t t0 = rawTimestamps[hi], t1 = rawTimestamps[hi + 1];
+        uint64_t t0 = (current_rollovers << 32) | rawTimestamps[hi];
+        uint64_t t1 = (current_rollovers << 32) | rawTimestamps[hi + 1];
         double frac = (t1 == t0) ? 0.0 : double(timestamp - t0) / double(t1 - t0);
         outValue = rawData[hi][seriesIndex] * (1.0 - frac) + rawData[hi + 1][seriesIndex] * frac;
         return true;
@@ -46,23 +55,25 @@ bool DataVisualizer::rawInterpolatedValueAt(uint32_t timestamp, uint8_t seriesIn
     return false;
 }
 
-bool DataVisualizer::compressedValueAt_inRange(uint32_t ts, uint8_t seriesIndex, double &outValue) const {
+bool DataVisualizer::compressedValueAt_inRange(uint64_t ts, uint8_t seriesIndex, double &outValue) const {
     const PolynomialSegment* segmentBuffer = compressor.getSegmentBuffer();
     uint8_t segmentCount = compressor.getSegmentCount();
     if (segmentCount == 0) return false;
 
-    uint32_t cursor = getCompressedEndAbs();
+    uint64_t cursor = getCompressedEndAbs();
     for (int s = (int)segmentCount - 1; s >= 0; --s) {
         const PolynomialSegment &seg = segmentBuffer[s];
-        int startPoly = (s == (int)segmentCount - 1) ? (int)compressor.getCurrentPolyIndex() -1 : (POLY_COUNT - 1);
+        int startPoly = (s == (int)segmentCount - 1) ? (int)compressor.getCurrentPolyIndex() - 1 : (POLY_COUNT - 1);
         for (int p = startPoly; p >= 0; --p) {
-            uint32_t dt = seg.timeDeltas[p];
+            uint64_t dt = (uint64_t)seg.timeDeltas[p] * TIME_PRECISION_DIVIDER;
             if (dt == 0) continue;
-            uint32_t startAbs = (cursor >= dt) ? (cursor - dt) : 0u;
+
+            uint64_t startAbs = (cursor >= dt) ? (cursor - dt) : 0;
+
             if (ts >= startAbs && ts < cursor) {
                 double tRel = (double)(ts - startAbs);
                 double tNorm = (dt == 0 ? 0.0 : tRel / (double)dt);
-                outValue = evaluatePolynomialNormalized(seg.coefficients[p][seriesIndex], POLY_DEGREE + 1, tNorm, seriesIndex);
+                outValue = evaluatePolynomialNormalized(seg.coefficients[p][seriesIndex], POLY_DEGREE + 1, tNorm);
                 return true;
             }
             cursor = startAbs;
@@ -71,14 +82,14 @@ bool DataVisualizer::compressedValueAt_inRange(uint32_t ts, uint8_t seriesIndex,
     return false;
 }
 
-void DataVisualizer::computeWindowMinMaxDirect(uint32_t wStart, uint32_t wEnd, float &outMin, float &outMax) const {
+void DataVisualizer::computeWindowMinMaxDirect(uint64_t wStart, uint64_t wEnd, float &outMin, float &outMax) const {
     outMin = INFINITY; outMax = -INFINITY;
     if (wEnd <= wStart) { outMin = -1; outMax = 1; return; }
     const uint16_t SAMPLES = 80;
-    uint32_t compressedEnd = getCompressedEndAbs();
+    uint64_t compressedEnd = getCompressedEndAbs();
     for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
         for (uint16_t i = 0; i <= SAMPLES; ++i) {
-            uint32_t ts = wStart + (uint64_t)i * (uint64_t)(wEnd - wStart) / SAMPLES;
+            uint64_t ts = wStart + i * (wEnd - wStart) / SAMPLES;
             double v;
             if (ts < compressedEnd && compressedValueAt_inRange(ts, series, v)) {
                 outMin = min(outMin, (float)v); outMax = max(outMax, (float)v);
@@ -87,7 +98,7 @@ void DataVisualizer::computeWindowMinMaxDirect(uint32_t wStart, uint32_t wEnd, f
             }
         }
         for (uint16_t i = 0; i < rawDataIndex; ++i) {
-            uint32_t t = rawTimestamps[i];
+            uint64_t t = rawTimestamps[i];
             if (t < wStart || t > wEnd) continue;
             outMin = min(outMin, rawData[i][series]); outMax = max(outMax, rawData[i][series]);
         }
@@ -97,20 +108,21 @@ void DataVisualizer::computeWindowMinMaxDirect(uint32_t wStart, uint32_t wEnd, f
     if (r <= 0.0001f) { outMin -= 1; outMax += 1; } else { outMin -= r*0.05f; outMax += r*0.05f; }
 }
 
-int DataVisualizer::buildPolyStarts(uint32_t starts[], int maxStarts) const {
+int DataVisualizer::buildPolyStarts(uint64_t starts[], int maxStarts) const {
     const PolynomialSegment* segmentBuffer = compressor.getSegmentBuffer();
     uint8_t segmentCount = compressor.getSegmentCount();
     if (segmentCount == 0) return 0;
 
-    uint32_t cursor = getCompressedEndAbs();
+    uint64_t cursor = getCompressedEndAbs();
     int count = 0;
     for (int s = (int)segmentCount - 1; s >= 0; --s) {
         const PolynomialSegment &seg = segmentBuffer[s];
-        int startPoly = (s == (int)segmentCount - 1) ? (int)compressor.getCurrentPolyIndex() -1 : (POLY_COUNT - 1);
+        int startPoly = (s == (int)segmentCount - 1) ? (int)compressor.getCurrentPolyIndex() - 1 : (POLY_COUNT - 1);
         for (int p = startPoly; p >= 0; --p) {
-            uint32_t dt = seg.timeDeltas[p];
+            uint64_t dt = (uint64_t)seg.timeDeltas[p] * TIME_PRECISION_DIVIDER;
             if (dt == 0) continue;
-            uint32_t startAbs = (cursor >= dt) ? (cursor - dt) : 0u;
+
+            uint64_t startAbs = (cursor >= dt) ? (cursor - dt) : 0;
             if (count < maxStarts) starts[count++] = startAbs;
             cursor = startAbs;
         }
@@ -122,12 +134,12 @@ int DataVisualizer::buildPolyStarts(uint32_t starts[], int maxStarts) const {
 // Main Drawing Function
 // =================================================================================================
 
-void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs) {
+void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint64_t windowEndAbs, uint32_t windowDurationMs) {
     if (rw <= 0 || rh <= 0) return;
 
-    uint32_t wEnd = windowEndAbs;
-    uint32_t wStart = (windowDurationMs == 0 || windowDurationMs > wEnd) ? 0u : (wEnd - windowDurationMs);
-    uint32_t compressedEnd = getCompressedEndAbs();
+    uint64_t wEnd = windowEndAbs;
+    uint64_t wStart = (windowDurationMs == 0 || windowDurationMs > wEnd) ? 0 : (wEnd - windowDurationMs);
+    uint64_t compressedEnd = getCompressedEndAbs();
 
     float vmin, vmax;
     computeWindowMinMaxDirect(wStart, wEnd, vmin, vmax);
@@ -135,7 +147,7 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
     tft.fillRect(rx, ry, rw, rh, TFT_BLACK);
     for (int i=0;i<=4;i++){ tft.drawFastHLine(rx, ry + (i*rh)/4, rw, 0x0821); tft.drawFastVLine(rx + (i*rw)/4, ry, rh, 0x0821);}
 
-    auto tsToX = [&](uint32_t ts) {
+    auto tsToX = [&](uint64_t ts) {
         if (wEnd == wStart) return rx;
         double f = double(ts - wStart) / double(wEnd - wStart);
         return rx + (int)round(f * (rw - 1));
@@ -154,10 +166,10 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
     }
 
     const int MAXS = SEGMENTS * POLY_COUNT;
-    uint32_t starts[MAXS];
-    int sc = buildPolyStarts((uint32_t*)starts, MAXS);
+    uint64_t starts[MAXS];
+    int sc = buildPolyStarts(starts, MAXS);
     for (int i = sc - 1; i >= 0; --i) {
-        uint32_t startAbs = starts[i];
+        uint64_t startAbs = starts[i];
         if (startAbs < wStart || startAbs > wEnd) continue;
         int x = tsToX(startAbs);
         tft.drawFastVLine(x, ry, rh, TFT_ORANGE);
@@ -174,7 +186,7 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
             int lastY = -1;
             int compressedRightX = tsToX(min(wEnd, compressedEnd));
             for (int px = 0; px <= compressedRightX - rx; ++px) {
-                uint32_t ts = wStart + (uint64_t)px * (uint64_t)(wEnd - wStart) / (uint32_t)max(1, rw - 1);
+                uint64_t ts = wStart + px * (wEnd - wStart) / max(1, rw - 1);
                 if (ts >= compressedEnd) break;
                 double v;
                 if (!compressedValueAt_inRange(ts, series, v)) continue;
@@ -188,8 +200,9 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
 
         if (rawDataIndex > 0) {
             int prevX = -1, prevY = -1;
+            uint64_t current_rollovers = compressor.getRolloverCount();
             for (uint16_t i = 0; i < rawDataIndex; ++i) {
-                uint32_t t = rawTimestamps[i];
+                uint64_t t = (current_rollovers << 32) | rawTimestamps[i];
                 if (t < wStart || t > wEnd) continue;
                 int x = tsToX(t);
                 int y = valueToY(rawData[i][series]);

@@ -79,7 +79,7 @@ void loop() {
 
     // Define the time window for the graph.
     uint32_t windowDurationMs = 60000;
-    uint32_t windowEnd = (raw_dataIndex > 0) ? raw_timestamps[raw_dataIndex - 1] : millis();
+    uint64_t windowEnd = (raw_dataIndex > 0) ? ((uint64_t)dataCompressor.getRolloverCount() << 32) | raw_timestamps[raw_dataIndex - 1] : millis();
 
     // Draw the graph using the visualizer.
     dataVisualizer.drawCompoundGraph(8, 8, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 16, windowEnd, windowDurationMs);

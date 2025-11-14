@@ -24,6 +24,7 @@
 #define BOUNDARY_MARGIN 5           // Margin for the main fitter.
 #define BOUNDARY_DELTA 10           // Time window of the margin for the main fitter.
 #define LOG_BUFFER_POINTS_PER_POLY 60 // Number of raw data points to accumulate before fitting a new polynomial.
+#define TIME_PRECISION_DIVIDER 10     // Divisor to reduce the precision of time deltas.
 
 // =================================================================================================
 // Data Structures
@@ -32,7 +33,7 @@
 // Represents a segment of the compressed data, containing multiple polynomials.
 struct PolynomialSegment {
     float coefficients[POLY_COUNT][NUM_DATA_SERIES][POLY_DEGREE + 1]; // Coefficients for each polynomial.
-    uint32_t timeDeltas[POLY_COUNT];                   // Time duration of each polynomial in milliseconds.
+    uint16_t timeDeltas[POLY_COUNT];                   // Time duration of each polynomial in milliseconds.
 };
 
 // =================================================================================================
@@ -70,6 +71,7 @@ public:
     uint16_t getCurrentPolyIndex() const { return currentPolyIndex; }
     uint32_t getRawLogDelta() const { return raw_log_delta; }
     uint32_t getLastTimestamp() const { return lastTimestamp; }
+    uint8_t getRolloverCount() const { return rollover_count; }
 
 
 private:
@@ -91,6 +93,7 @@ private:
     uint32_t lastTimestamp;                    // The timestamp of the last logged data point.
     uint32_t raw_log_delta;                    // Time delta since the last polynomial was created.
     uint8_t head;                              // The index of the oldest segment in the circular buffer.
+    uint8_t rollover_count;                    // Counter for timestamp rollovers.
 
     // Buffer for accumulating incoming raw data before fitting.
     float rawDataBuffer[LOG_BUFFER_POINTS_PER_POLY][NUM_DATA_SERIES];

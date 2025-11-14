@@ -5,7 +5,7 @@
 static inline double normalizeTime(double t, double tMax) { return t / tMax; }
 
 // Constructor
-DataCompressor::DataCompressor() : segmentCount(0), currentPolyIndex(0), lastTimestamp(0), raw_log_delta(0), head(0), dataIndex(0) {
+DataCompressor::DataCompressor() : segmentCount(0), currentPolyIndex(0), lastTimestamp(0), raw_log_delta(0), head(0), dataIndex(0), rollover_count(0) {
     // Initialize buffer
 }
 
@@ -42,13 +42,16 @@ void DataCompressor::removeOldestTwo() {
 
 
 void DataCompressor::logSampledData(const float* data, uint32_t currentTimestamp) {
+    if (currentTimestamp < lastTimestamp) {
+        rollover_count++;
+    }
     uint32_t timeDelta = (currentTimestamp - lastTimestamp);
     lastTimestamp = currentTimestamp;
 
     for (int i = 0; i < NUM_DATA_SERIES; ++i) {
         rawDataBuffer[dataIndex][i] = data[i];
     }
-    timestampsBuffer[dataIndex] = timeDelta;
+    timestampsBuffer[dataIndex] = timeDelta / TIME_PRECISION_DIVIDER;
     dataIndex++;
     raw_log_delta += timeDelta;
 
@@ -86,7 +89,7 @@ void DataCompressor::logSampledData(const float* data, uint32_t currentTimestamp
                 segmentBuffer[tail].coefficients[currentPolyIndex][i][j] = new_coefficients[j];
             }
         }
-        segmentBuffer[tail].timeDeltas[currentPolyIndex] = new_timeDelta;
+        segmentBuffer[tail].timeDeltas[currentPolyIndex] = new_timeDelta / TIME_PRECISION_DIVIDER;
 
         Serial.print("Added polynomial ");
         Serial.print(currentPolyIndex);
@@ -121,7 +124,7 @@ void DataCompressor::compressDataToSegment(uint8_t seriesIndex, const uint32_t* 
     const int postMargin = BOUNDARY_MARGIN / 2;
 
     uint64_t totalTimeU64 = 0;
-    for (uint16_t j = 0; j < dataSize; ++j) totalTimeU64 += timestamps[j];
+    for (uint16_t j = 0; j < dataSize; ++j) totalTimeU64 += timestamps[j] * TIME_PRECISION_DIVIDER;
     double totalTime = double(totalTimeU64);
     if (totalTime <= 0.0) totalTime = 1.0;
 
@@ -168,7 +171,7 @@ void DataCompressor::compressDataToSegment(uint8_t seriesIndex, const uint32_t* 
         for (int i = 0; i < preMargin3; ++i) absTimes[i] = preStart + double(i * BOUNDARY_DELTA3);
         double tAbs = 0.0;
         for (uint16_t j = 0; j < dataSize; ++j) {
-            tAbs += double(timestamps[j]);
+            tAbs += double(timestamps[j] * TIME_PRECISION_DIVIDER);
             absTimes[j + preMargin3] = tAbs;
             values[j + preMargin3] = rawDataBuffer[j][seriesIndex];
         }
@@ -203,7 +206,7 @@ void DataCompressor::compressDataToSegment(uint8_t seriesIndex, const uint32_t* 
         for (int i = 0; i < preMargin; ++i) absTimes[i] = preStart + double(i * BOUNDARY_DELTA);
         double tAbs = 0.0;
         for (uint16_t j = 0; j < dataSize; ++j) {
-            tAbs += double(timestamps[j]);
+            tAbs += double(timestamps[j] * TIME_PRECISION_DIVIDER);
             absTimes[j + preMargin] = tAbs;
             values[j + preMargin] = rawDataBuffer[j][seriesIndex];
         }
@@ -258,28 +261,28 @@ void DataCompressor::combinePolynomials(const PolynomialSegment &oldest, const P
     for (uint16_t i = 0; i < POLY_COUNT; i = i + 2) {
         if (i + 1 >= POLY_COUNT || oldest.timeDeltas[i] == 0 || oldest.timeDeltas[i+1] == 0) break;
 
-        double combinedTimeDelta = oldest.timeDeltas[i] + oldest.timeDeltas[i+1];
+        double combinedTimeDelta = (oldest.timeDeltas[i] + oldest.timeDeltas[i+1]) * TIME_PRECISION_DIVIDER;
         for (int series = 0; series < NUM_DATA_SERIES; ++series) {
-            std::vector<float> newCoefficients = fitter.composePolynomials(oldest.coefficients[i][series], oldest.timeDeltas[i], oldest.coefficients[i+1][series], oldest.timeDeltas[i+1], POLY_DEGREE);
+            std::vector<float> newCoefficients = fitter.composePolynomials(oldest.coefficients[i][series], oldest.timeDeltas[i] * TIME_PRECISION_DIVIDER, oldest.coefficients[i+1][series], oldest.timeDeltas[i+1] * TIME_PRECISION_DIVIDER, POLY_DEGREE);
             for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE + 1; j++) {
                 recompressedSegment.coefficients[currentPolyIndex_local][series][j] = newCoefficients[j];
             }
         }
-        recompressedSegment.timeDeltas[currentPolyIndex_local] = combinedTimeDelta;
+        recompressedSegment.timeDeltas[currentPolyIndex_local] = combinedTimeDelta / TIME_PRECISION_DIVIDER;
         currentPolyIndex_local++;
     }
 
     for (uint16_t i = 0; i < POLY_COUNT; i = i + 2) {
         if (i + 1 >= POLY_COUNT || secondOldest.timeDeltas[i] == 0 || secondOldest.timeDeltas[i+1] == 0) break;
 
-        double combinedTimeDelta = secondOldest.timeDeltas[i] + secondOldest.timeDeltas[i+1];
+        double combinedTimeDelta = (secondOldest.timeDeltas[i] + secondOldest.timeDeltas[i+1]) * TIME_PRECISION_DIVIDER;
         for (int series = 0; series < NUM_DATA_SERIES; ++series) {
-            std::vector<float> newCoefficients = fitter.composePolynomials(secondOldest.coefficients[i][series], secondOldest.timeDeltas[i], secondOldest.coefficients[i+1][series], secondOldest.timeDeltas[i+1], POLY_DEGREE);
+            std::vector<float> newCoefficients = fitter.composePolynomials(secondOldest.coefficients[i][series], secondOldest.timeDeltas[i] * TIME_PRECISION_DIVIDER, secondOldest.coefficients[i+1][series], secondOldest.timeDeltas[i+1] * TIME_PRECISION_DIVIDER, POLY_DEGREE);
             for (uint8_t j = 0; j < newCoefficients.size() && j < POLY_DEGREE + 1; j++) {
                 recompressedSegment.coefficients[currentPolyIndex_local][series][j] = newCoefficients[j];
             }
         }
-        recompressedSegment.timeDeltas[currentPolyIndex_local] = combinedTimeDelta;
+        recompressedSegment.timeDeltas[currentPolyIndex_local] = combinedTimeDelta / TIME_PRECISION_DIVIDER;
         currentPolyIndex_local++;
     }
 }
