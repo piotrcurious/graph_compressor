@@ -42,11 +42,32 @@ void DataCompressor::removeOldestTwo() {
 
 
 void DataCompressor::logSampledData(const float* data, uint32_t currentTimestamp) {
+    for (int i = 0; i < NUM_DATA_SERIES; ++i) {
+        lastDataPoint[i] = data[i];
+    }
+
     if (currentTimestamp < lastTimestamp) {
         rollover_count++;
     }
     uint32_t timeDelta = (currentTimestamp - lastTimestamp);
     lastTimestamp = currentTimestamp;
+
+    if (timeDelta > 250) {
+        uint32_t fillTime = 50;
+        while (timeDelta > fillTime) {
+            for (int i = 0; i < NUM_DATA_SERIES; ++i) {
+                rawDataBuffer[dataIndex][i] = lastDataPoint[i];
+            }
+            timestampsBuffer[dataIndex] = fillTime / TIME_PRECISION_DIVIDER;
+            dataIndex++;
+            raw_log_delta += fillTime;
+            timeDelta -= fillTime;
+
+            if (dataIndex >= LOG_BUFFER_POINTS_PER_POLY) {
+                processBufferedData();
+            }
+        }
+    }
 
     for (int i = 0; i < NUM_DATA_SERIES; ++i) {
         rawDataBuffer[dataIndex][i] = data[i];
@@ -55,51 +76,57 @@ void DataCompressor::logSampledData(const float* data, uint32_t currentTimestamp
     dataIndex++;
     raw_log_delta += timeDelta;
 
-   if (dataIndex >= LOG_BUFFER_POINTS_PER_POLY) {
-        if (segmentCount == 0) {
-           addSegment(PolynomialSegment());
-            currentPolyIndex = 0 ;
-            for (uint16_t i = 0; i < POLY_COUNT; i++) {
-                uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
-                segmentBuffer[tail].timeDeltas[i] = 0;
-            }
-        }
-
-        if (currentPolyIndex >= POLY_COUNT) {
-            if (isBufferFull()) {
-                recompressSegments();
-            } else {
-                Serial.print("Created new segment ");
-                Serial.println(segmentCount);
-            }
-            addSegment(PolynomialSegment());
-            currentPolyIndex = 0;
-            for (uint16_t i = 0; i < POLY_COUNT; i++) {
-                uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
-                segmentBuffer[tail].timeDeltas[i] = 0;
-            }
-        }
-
-        uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
-        uint32_t new_timeDelta = 0;
-        for (int i = 0; i < NUM_DATA_SERIES; ++i) {
-            float new_coefficients[POLY_DEGREE + 1];
-            compressDataToSegment(i, timestampsBuffer, dataIndex, new_coefficients, new_timeDelta);
-            for (int j = 0; j < POLY_DEGREE + 1; ++j) {
-                segmentBuffer[tail].coefficients[currentPolyIndex][i][j] = new_coefficients[j];
-            }
-        }
-        segmentBuffer[tail].timeDeltas[currentPolyIndex] = new_timeDelta / TIME_PRECISION_DIVIDER;
-
-        Serial.print("Added polynomial ");
-        Serial.print(currentPolyIndex);
-        Serial.print(" to segment ");
-        Serial.println(segmentCount - 1);
-
-        currentPolyIndex++;
-        raw_log_delta = 0;
-        dataIndex = 0;
+    if (dataIndex >= LOG_BUFFER_POINTS_PER_POLY) {
+        processBufferedData();
     }
+}
+
+void DataCompressor::processBufferedData() {
+    if (dataIndex == 0) return;
+
+    if (segmentCount == 0) {
+        addSegment(PolynomialSegment());
+        currentPolyIndex = 0;
+        for (uint16_t i = 0; i < POLY_COUNT; i++) {
+            uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
+            segmentBuffer[tail].timeDeltas[i] = 0;
+        }
+    }
+
+    if (currentPolyIndex >= POLY_COUNT) {
+        if (isBufferFull()) {
+            recompressSegments();
+        } else {
+            Serial.print("Created new segment ");
+            Serial.println(segmentCount);
+        }
+        addSegment(PolynomialSegment());
+        currentPolyIndex = 0;
+        for (uint16_t i = 0; i < POLY_COUNT; i++) {
+            uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
+            segmentBuffer[tail].timeDeltas[i] = 0;
+        }
+    }
+
+    uint8_t tail = (head + segmentCount - 1) % SEGMENTS;
+    uint32_t new_timeDelta = 0;
+    for (int i = 0; i < NUM_DATA_SERIES; ++i) {
+        float new_coefficients[POLY_DEGREE + 1];
+        compressDataToSegment(i, timestampsBuffer, dataIndex, new_coefficients, new_timeDelta);
+        for (int j = 0; j < POLY_DEGREE + 1; ++j) {
+            segmentBuffer[tail].coefficients[currentPolyIndex][i][j] = new_coefficients[j];
+        }
+    }
+    segmentBuffer[tail].timeDeltas[currentPolyIndex] = new_timeDelta / TIME_PRECISION_DIVIDER;
+
+    Serial.print("Added polynomial ");
+    Serial.print(currentPolyIndex);
+    Serial.print(" to segment ");
+    Serial.println(segmentCount - 1);
+
+    currentPolyIndex++;
+    raw_log_delta = 0;
+    dataIndex = 0;
 }
 
 // This function needs access to evaluatePolynomial, which should also be part of the class or a utility.

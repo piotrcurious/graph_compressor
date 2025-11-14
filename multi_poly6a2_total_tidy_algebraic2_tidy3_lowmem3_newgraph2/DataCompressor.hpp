@@ -81,6 +81,7 @@ private:
     bool isBufferFull() const;
     void getOldestSegments(PolynomialSegment& oldest, PolynomialSegment& secondOldest) const;
     void removeOldestTwo();
+    void processBufferedData();
     void compressDataToSegment(uint8_t seriesIndex, const uint32_t* timestamps, uint16_t dataSize, float* coefficients, uint32_t& timeDelta);
     void combinePolynomials(const PolynomialSegment& oldest, const PolynomialSegment& secondOldest, PolynomialSegment& recompressedSegment);
     void recompressSegments();
@@ -99,6 +100,7 @@ private:
     float rawDataBuffer[LOG_BUFFER_POINTS_PER_POLY][NUM_DATA_SERIES];
     uint32_t timestampsBuffer[LOG_BUFFER_POINTS_PER_POLY];
     uint16_t dataIndex;
+    float lastDataPoint[NUM_DATA_SERIES];
 };
 
 #endif // DATA_COMPRESSOR_H
