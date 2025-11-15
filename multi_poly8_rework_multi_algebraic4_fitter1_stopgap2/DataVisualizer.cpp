@@ -119,33 +119,21 @@ int DataVisualizer::buildPolyStarts(uint32_t starts[], int maxStarts) const {
 }
 
 // =================================================================================================
-// Main Drawing Function
+// Main Drawing Functions
 // =================================================================================================
 
-void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs) {
-    if (rw <= 0 || rh <= 0) return;
+void DataVisualizer::drawGrid(int rx, int ry, int rw, int rh) {
+    for (int i=0;i<=4;i++){ tft.drawFastHLine(ry + (i*rh)/4, rx, rw, 0x0821); tft.drawFastVLine(rx + (i*rw)/4, ry, rh, 0x0821);}
+}
 
-    uint32_t wEnd = windowEndAbs;
-    uint32_t wStart = (windowDurationMs == 0 || windowDurationMs > wEnd) ? 0u : (wEnd - windowDurationMs);
-    uint32_t compressedEnd = getCompressedEndAbs();
-
-    float vmin, vmax;
-    computeWindowMinMaxDirect(wStart, wEnd, vmin, vmax);
-
-    tft.fillRect(rx, ry, rw, rh, TFT_BLACK);
-    for (int i=0;i<=4;i++){ tft.drawFastHLine(rx, ry + (i*rh)/4, rw, 0x0821); tft.drawFastVLine(rx + (i*rw)/4, ry, rh, 0x0821);}
-
+void DataVisualizer::drawMarkers(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd) {
     auto tsToX = [&](uint32_t ts) {
         if (wEnd == wStart) return rx;
         double f = double(ts - wStart) / double(wEnd - wStart);
         return rx + (int)round(f * (rw - 1));
     };
 
-    auto valueToY = [&](double val) {
-        double c = val;
-        if (c < vmin) c = vmin; if (c > vmax) c = vmax;
-        return ry + (int)round((1.0 - (c - vmin) / (vmax - vmin)) * (rh - 1));
-    };
+    uint32_t compressedEnd = getCompressedEndAbs();
 
     if (wEnd > compressedEnd) {
         int xStart = tsToX(compressedEnd);
@@ -167,8 +155,24 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
         int xb = tsToX(compressedEnd);
         tft.drawFastVLine(xb, ry, rh, TFT_MAGENTA);
     }
+}
 
+void DataVisualizer::drawPolynomials(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd, float vmin, float vmax) {
+    auto tsToX = [&](uint32_t ts) {
+        if (wEnd == wStart) return rx;
+        double f = double(ts - wStart) / double(wEnd - wStart);
+        return rx + (int)round(f * (rw - 1));
+    };
+
+    auto valueToY = [&](double val) {
+        double c = val;
+        if (c < vmin) c = vmin; if (c > vmax) c = vmax;
+        return ry + (int)round((1.0 - (c - vmin) / (vmax - vmin)) * (rh - 1));
+    };
+
+    uint32_t compressedEnd = getCompressedEndAbs();
     uint16_t colors[] = {TFT_YELLOW, TFT_GREEN};
+
     for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
         if (compressor.getSegmentCount() > 0) {
             int lastY = -1;
@@ -185,20 +189,82 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
                 lastY = y;
             }
         }
+    }
+}
 
+void DataVisualizer::drawRawData(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd, float vmin, float vmax, bool full) {
+    auto tsToX = [&](uint32_t ts) {
+        if (wEnd == wStart) return rx;
+        double f = double(ts - wStart) / double(wEnd - wStart);
+        return rx + (int)round(f * (rw - 1));
+    };
+
+    auto valueToY = [&](double val) {
+        double c = val;
+        if (c < vmin) c = vmin; if (c > vmax) c = vmax;
+        return ry + (int)round((1.0 - (c - vmin) / (vmax - vmin)) * (rh - 1));
+    };
+
+    uint32_t compressedEnd = getCompressedEndAbs();
+    uint16_t colors[] = {TFT_YELLOW, TFT_GREEN};
+
+    for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
         if (rawDataIndex > 0) {
             int prevX = -1, prevY = -1;
             for (uint16_t i = 0; i < rawDataIndex; ++i) {
                 uint32_t t = rawTimestamps[i];
+
+                if (!full && t < compressedEnd) {
+                    prevX = -1;
+                    continue;
+                }
+
                 if (t < wStart || t > wEnd) continue;
+
                 int x = tsToX(t);
                 int y = valueToY(rawData[i][series]);
-                tft.drawPixel(x, y, colors[series]);
-                if (prevX >= 0) tft.drawLine(prevX, prevY, x, y, colors[series]);
+
+                if (prevX != -1) {
+                    tft.drawLine(prevX, prevY, x, y, colors[series]);
+                } else {
+                    tft.drawPixel(x, y, colors[series]);
+                }
                 prevX = x; prevY = y;
             }
         }
     }
+}
 
+void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs) {
+    if (rw <= 0 || rh <= 0) return;
+
+    uint32_t wEnd = windowEndAbs;
+    uint32_t wStart = (windowDurationMs == 0 || windowDurationMs > wEnd) ? 0u : (wEnd - windowDurationMs);
+
+    float vmin, vmax;
+    computeWindowMinMaxDirect(wStart, wEnd, vmin, vmax);
+
+    tft.fillRect(rx, ry, rw, rh, TFT_BLACK);
+    drawGrid(rx, ry, rw, rh);
+    drawMarkers(rx, ry, rw, rh, wStart, wEnd);
+    drawPolynomials(rx, ry, rw, rh, wStart, wEnd, vmin, vmax);
+    drawRawData(rx, ry, rw, rh, wStart, wEnd, vmin, vmax, true); // 'true' for full raw data
+    tft.drawRect(rx, ry, rw, rh, TFT_WHITE);
+}
+
+void DataVisualizer::drawCombinedGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs) {
+    if (rw <= 0 || rh <= 0) return;
+
+    uint32_t wEnd = windowEndAbs;
+    uint32_t wStart = (windowDurationMs == 0 || windowDurationMs > wEnd) ? 0u : (wEnd - windowDurationMs);
+
+    float vmin, vmax;
+    computeWindowMinMaxDirect(wStart, wEnd, vmin, vmax);
+
+    tft.fillRect(rx, ry, rw, rh, TFT_BLACK);
+    drawGrid(rx, ry, rw, rh);
+    drawMarkers(rx, ry, rw, rh, wStart, wEnd);
+    drawPolynomials(rx, ry, rw, rh, wStart, wEnd, vmin, vmax);
+    drawRawData(rx, ry, rw, rh, wStart, wEnd, vmin, vmax, false); // 'false' for uncompressed raw data only
     tft.drawRect(rx, ry, rw, rh, TFT_WHITE);
 }

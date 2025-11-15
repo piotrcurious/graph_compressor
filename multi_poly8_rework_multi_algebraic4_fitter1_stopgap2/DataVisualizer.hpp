@@ -8,7 +8,18 @@ class DataVisualizer {
 public:
     DataVisualizer(TFT_eSPI& tft, DataCompressor& compressor,const float (*rawData)[NUM_DATA_SERIES], const uint32_t* rawTimestamps, const uint16_t& rawDataIndex);
 
+    // Main production graph drawing function
+    void drawCombinedGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs);
+
+    // Debug function to draw the full raw data graph
     void drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs);
+
+    // Functions to draw specific parts of the graph
+    void drawGrid(int rx, int ry, int rw, int rh);
+    void drawMarkers(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd);
+    void drawPolynomials(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd, float vmin, float vmax);
+    void drawRawData(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd, float vmin, float vmax, bool full);
+
 
 private:
     TFT_eSPI& tft;

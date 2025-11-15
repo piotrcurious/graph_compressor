@@ -85,5 +85,5 @@ void loop() {
     uint32_t windowEnd = (raw_dataIndex > 0) ? raw_timestamps[raw_dataIndex - 1] : currentTimestamp;
 
     // Draw the graph using the visualizer.
-    dataVisualizer.drawCompoundGraph(8, 8, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 16, windowEnd, windowDurationMs);
+    dataVisualizer.drawCombinedGraph(8, 8, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 16, windowEnd, windowDurationMs);
 }
