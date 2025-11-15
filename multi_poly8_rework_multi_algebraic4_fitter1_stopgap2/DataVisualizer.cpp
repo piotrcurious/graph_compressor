@@ -30,21 +30,32 @@ bool DataVisualizer::rawInterpolatedValueAt(uint32_t timestamp, uint8_t seriesIn
     if (dataIndex == 0) return false;
 
     const float* rawData = compressor.getRawDataBuffer();
-    const uint32_t* timestamps = compressor.getTimestampsBuffer();
+    const uint32_t* timeDeltas = compressor.getTimestampsBuffer();
+    uint32_t compressedEnd = getCompressedEndAbs();
 
-    if (timestamp <= timestamps[0]) {
-        outValue = rawData[seriesIndex];
+    // Reconstruct absolute timestamps
+    uint32_t absTimestamps[dataIndex];
+    uint32_t currentAbsTime = compressedEnd;
+    for (uint16_t i = 0; i < dataIndex; ++i) {
+        currentAbsTime += timeDeltas[i];
+        absTimestamps[i] = currentAbsTime;
+    }
+
+    // Check boundaries
+    if (timestamp <= absTimestamps[0]) {
+        outValue = rawData[seriesIndex]; // value at index 0
         return true;
     }
-    if (timestamp >= timestamps[dataIndex - 1]) {
+    if (timestamp >= absTimestamps[dataIndex - 1]) {
         outValue = rawData[(dataIndex - 1) * NUM_DATA_SERIES + seriesIndex];
         return true;
     }
 
+    // Binary search to find the surrounding points
     int lo = 0, hi = (int)dataIndex - 1;
     while (lo <= hi) {
         int mid = (lo + hi) >> 1;
-        uint32_t tm = timestamps[mid];
+        uint32_t tm = absTimestamps[mid];
         if (tm == timestamp) {
             outValue = rawData[mid * NUM_DATA_SERIES + seriesIndex];
             return true;
@@ -52,14 +63,17 @@ bool DataVisualizer::rawInterpolatedValueAt(uint32_t timestamp, uint8_t seriesIn
         if (tm < timestamp) lo = mid + 1; else hi = mid - 1;
     }
 
+    // `hi` is now the index of the point just before the target timestamp
     if (hi >= 0 && hi + 1 < dataIndex) {
-        uint32_t t0 = timestamps[hi], t1 = timestamps[hi + 1];
+        uint32_t t0 = absTimestamps[hi];
+        uint32_t t1 = absTimestamps[hi + 1];
         double frac = (t1 == t0) ? 0.0 : double(timestamp - t0) / double(t1 - t0);
         double v0 = rawData[hi * NUM_DATA_SERIES + seriesIndex];
         double v1 = rawData[(hi + 1) * NUM_DATA_SERIES + seriesIndex];
         outValue = v0 * (1.0 - frac) + v1 * frac;
         return true;
     }
+
     return false;
 }
 
@@ -94,7 +108,7 @@ void DataVisualizer::computeWindowMinMaxDirect(uint32_t wStart, uint32_t wEnd, f
     const uint16_t SAMPLES = 80;
     uint32_t compressedEnd = getCompressedEndAbs();
     const float* rawData = compressor.getRawDataBuffer();
-    const uint32_t* timestamps = compressor.getTimestampsBuffer();
+    const uint32_t* timeDeltas = compressor.getTimestampsBuffer();
     const uint16_t dataIndex = compressor.getDataIndex();
 
     for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
@@ -107,11 +121,15 @@ void DataVisualizer::computeWindowMinMaxDirect(uint32_t wStart, uint32_t wEnd, f
                 outMin = min(outMin, (float)v); outMax = max(outMax, (float)v);
             }
         }
+
+        // Also check the raw data points directly
+        uint32_t currentAbsTime = compressedEnd;
         for (uint16_t i = 0; i < dataIndex; ++i) {
-            uint32_t t = timestamps[i];
-            if (t < wStart || t > wEnd) continue;
-            outMin = min(outMin, rawData[i * NUM_DATA_SERIES + series]);
-            outMax = max(outMax, rawData[i * NUM_DATA_SERIES + series]);
+            currentAbsTime += timeDeltas[i];
+            if (currentAbsTime >= wStart && currentAbsTime <= wEnd) {
+                outMin = min(outMin, rawData[i * NUM_DATA_SERIES + series]);
+                outMax = max(outMax, rawData[i * NUM_DATA_SERIES + series]);
+            }
         }
     }
     if (isinf(outMin) || isinf(outMax)) { outMin = -1; outMax = 1; }
@@ -214,14 +232,15 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
         const uint16_t dataIndex = compressor.getDataIndex();
         if (dataIndex > 0) {
             const float* rawData = compressor.getRawDataBuffer();
-            const uint32_t* timestamps = compressor.getTimestampsBuffer();
+            const uint32_t* timeDeltas = compressor.getTimestampsBuffer();
+            uint32_t currentAbsTime = compressedEnd;
 
             // Connect compressed to raw data
             if (lastX != -1) {
-                uint32_t t = timestamps[0];
-                if (t >= wStart && t <= wEnd) {
-                    int x = tsToX(t);
-                    int y = valueToY(rawData[series]);
+                currentAbsTime += timeDeltas[0];
+                if (currentAbsTime >= wStart && currentAbsTime <= wEnd) {
+                    int x = tsToX(currentAbsTime);
+                    int y = valueToY(rawData[series]); // Value at index 0
                     tft.drawLine(lastX, lastY, x, y, colors[series]);
                     lastX = x; lastY = y;
                 }
@@ -229,9 +248,9 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
 
             // Draw the rest of the raw data
             for (uint16_t i = 0; i < dataIndex; ++i) {
-                uint32_t t = timestamps[i];
-                if (t < wStart || t > wEnd) continue;
-                int x = tsToX(t);
+                if(i > 0) currentAbsTime += timeDeltas[i];
+                if (currentAbsTime < wStart || currentAbsTime > wEnd) continue;
+                int x = tsToX(currentAbsTime);
                 int y = valueToY(rawData[i * NUM_DATA_SERIES + series]);
                 if (lastX != -1) tft.drawLine(lastX, lastY, x, y, colors[series]);
                 else tft.drawPixel(x, y, colors[series]);
