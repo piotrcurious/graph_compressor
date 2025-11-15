@@ -18,7 +18,7 @@ static float    raw_Data[MAX_RAW_DATA][NUM_DATA_SERIES];
 static uint32_t raw_timestamps[MAX_RAW_DATA];
 static uint16_t raw_dataIndex = 0;
 
-DataVisualizer dataVisualizer(tft, dataCompressor, (const float (*)[NUM_DATA_SERIES])raw_Data, raw_timestamps, raw_dataIndex);
+DataVisualizer dataVisualizer(tft, dataCompressor);
 
 
 // =================================================================================================
@@ -57,6 +57,50 @@ static void sampleVectorData(uint32_t timestamp, float* outData) {
 // Arduino Setup and Loop
 // =================================================================================================
 
+void drawRawDataDebug(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd, float vmin, float vmax) {
+    auto tsToX = [&](uint32_t ts) {
+        if (wEnd == wStart) return rx;
+        double f = double(ts - wStart) / double(wEnd - wStart);
+        return rx + (int)round(f * (rw - 1));
+    };
+
+    auto valueToY = [&](double val) {
+        double c = val;
+        if (c < vmin) c = vmin; if (c > vmax) c = vmax;
+        return ry + (int)round((1.0 - (c - vmin) / (vmax - vmin)) * (rh - 1));
+    };
+
+    uint16_t colors[] = {TFT_CYAN, TFT_ORANGE};
+    for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
+        if (raw_dataIndex > 0) {
+            int prevX = -1, prevY = -1;
+            for (uint16_t i = 0; i < raw_dataIndex; ++i) {
+                uint32_t t = raw_timestamps[i];
+                if (t < wStart || t > wEnd) continue;
+                int x = tsToX(t);
+                int y = valueToY(raw_Data[i][series]);
+                if (prevX != -1) {
+                    tft.drawLine(prevX, prevY, x, y, colors[series]);
+                } else {
+                    tft.drawPixel(x, y, colors[series]);
+                }
+                prevX = x; prevY = y;
+            }
+        }
+    }
+}
+
+void drawDebugGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs) {
+    dataVisualizer.drawCompoundGraph(rx, ry, rw, rh, windowEndAbs, windowDurationMs);
+
+    uint32_t wEnd = windowEndAbs;
+    uint32_t wStart = (windowDurationMs == 0 || windowDurationMs > wEnd) ? 0u : (wEnd - windowDurationMs);
+
+    float vmin = -100, vmax = 100;
+
+    drawRawDataDebug(rx, ry, rw, rh, wStart, wEnd, vmin, vmax);
+}
+
 void setup() {
     Serial.begin(115200);
     randomSeed(analogRead(0));
@@ -84,6 +128,9 @@ void loop() {
    // uint32_t windowEnd = (raw_dataIndex > 0) ? raw_timestamps[raw_dataIndex - 1] : millis();
     uint32_t windowEnd = (raw_dataIndex > 0) ? raw_timestamps[raw_dataIndex - 1] : currentTimestamp;
 
-    // Draw the graph using the visualizer.
-    dataVisualizer.drawCombinedGraph(8, 8, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 16, windowEnd, windowDurationMs);
+    // Draw the production graph (compressed + recent raw data).
+    dataVisualizer.drawCompoundGraph(8, 8, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 16, windowEnd, windowDurationMs);
+
+    // Uncomment the following line to draw the debug graph (production graph + full raw data overlay).
+    // drawDebugGraph(8, 8, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 16, windowEnd, windowDurationMs);
 }

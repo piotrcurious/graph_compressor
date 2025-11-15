@@ -4,8 +4,8 @@
 // Constructor
 // =================================================================================================
 
-DataVisualizer::DataVisualizer(TFT_eSPI& tft, DataCompressor& compressor, const float (*rawData)[NUM_DATA_SERIES], const uint32_t* rawTimestamps, const uint16_t& rawDataIndex)
-    : tft(tft), compressor(compressor), rawData(rawData), rawTimestamps(rawTimestamps), rawDataIndex(rawDataIndex) {}
+DataVisualizer::DataVisualizer(TFT_eSPI& tft, DataCompressor& compressor)
+    : tft(tft), compressor(compressor) {}
 
 // =================================================================================================
 // Private Helper Functions
@@ -22,25 +22,44 @@ inline double DataVisualizer::evaluatePolynomialNormalized(const float* coeffici
 }
 
 uint32_t DataVisualizer::getCompressedEndAbs() const {
-    return (rawDataIndex > 0) ? (rawTimestamps[rawDataIndex - 1] - compressor.getRawLogDelta()) : 0u;
+    const uint32_t* timestamps = compressor.getTimestampsBuffer();
+    const uint16_t dataIndex = compressor.getDataIndex();
+    return (dataIndex > 0) ? (timestamps[dataIndex - 1] - compressor.getRawLogDelta()) : 0u;
 }
 
 bool DataVisualizer::rawInterpolatedValueAt(uint32_t timestamp, uint8_t seriesIndex, double &outValue) const {
-    if (rawDataIndex == 0) return false;
-    if (timestamp <= rawTimestamps[0]) { outValue = rawData[0][seriesIndex]; return true; }
-    if (timestamp >= rawTimestamps[rawDataIndex - 1]) { outValue = rawData[rawDataIndex - 1][seriesIndex]; return true; }
+    const uint16_t dataIndex = compressor.getDataIndex();
+    if (dataIndex == 0) return false;
 
-    int lo = 0, hi = (int)rawDataIndex - 1;
+    const float* rawData = compressor.getRawDataBuffer();
+    const uint32_t* timestamps = compressor.getTimestampsBuffer();
+
+    if (timestamp <= timestamps[0]) {
+        outValue = rawData[seriesIndex];
+        return true;
+    }
+    if (timestamp >= timestamps[dataIndex - 1]) {
+        outValue = rawData[(dataIndex - 1) * NUM_DATA_SERIES + seriesIndex];
+        return true;
+    }
+
+    int lo = 0, hi = (int)dataIndex - 1;
     while (lo <= hi) {
         int mid = (lo + hi) >> 1;
-        uint32_t tm = rawTimestamps[mid];
-        if (tm == timestamp) { outValue = rawData[mid][seriesIndex]; return true; }
+        uint32_t tm = timestamps[mid];
+        if (tm == timestamp) {
+            outValue = rawData[mid * NUM_DATA_SERIES + seriesIndex];
+            return true;
+        }
         if (tm < timestamp) lo = mid + 1; else hi = mid - 1;
     }
-    if (hi >= 0 && hi + 1 < rawDataIndex) {
-        uint32_t t0 = rawTimestamps[hi], t1 = rawTimestamps[hi + 1];
+
+    if (hi >= 0 && hi + 1 < dataIndex) {
+        uint32_t t0 = timestamps[hi], t1 = timestamps[hi + 1];
         double frac = (t1 == t0) ? 0.0 : double(timestamp - t0) / double(t1 - t0);
-        outValue = rawData[hi][seriesIndex] * (1.0 - frac) + rawData[hi + 1][seriesIndex] * frac;
+        double v0 = rawData[hi * NUM_DATA_SERIES + seriesIndex];
+        double v1 = rawData[(hi + 1) * NUM_DATA_SERIES + seriesIndex];
+        outValue = v0 * (1.0 - frac) + v1 * frac;
         return true;
     }
     return false;
@@ -76,6 +95,10 @@ void DataVisualizer::computeWindowMinMaxDirect(uint32_t wStart, uint32_t wEnd, f
     if (wEnd <= wStart) { outMin = -1; outMax = 1; return; }
     const uint16_t SAMPLES = 80;
     uint32_t compressedEnd = getCompressedEndAbs();
+    const float* rawData = compressor.getRawDataBuffer();
+    const uint32_t* timestamps = compressor.getTimestampsBuffer();
+    const uint16_t dataIndex = compressor.getDataIndex();
+
     for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
         for (uint16_t i = 0; i <= SAMPLES; ++i) {
             uint32_t ts = wStart + (uint64_t)i * (uint64_t)(wEnd - wStart) / SAMPLES;
@@ -86,10 +109,11 @@ void DataVisualizer::computeWindowMinMaxDirect(uint32_t wStart, uint32_t wEnd, f
                 outMin = min(outMin, (float)v); outMax = max(outMax, (float)v);
             }
         }
-        for (uint16_t i = 0; i < rawDataIndex; ++i) {
-            uint32_t t = rawTimestamps[i];
+        for (uint16_t i = 0; i < dataIndex; ++i) {
+            uint32_t t = timestamps[i];
             if (t < wStart || t > wEnd) continue;
-            outMin = min(outMin, rawData[i][series]); outMax = max(outMax, rawData[i][series]);
+            outMin = min(outMin, rawData[i * NUM_DATA_SERIES + series]);
+            outMax = max(outMax, rawData[i * NUM_DATA_SERIES + series]);
         }
     }
     if (isinf(outMin) || isinf(outMax)) { outMin = -1; outMax = 1; }
@@ -119,21 +143,33 @@ int DataVisualizer::buildPolyStarts(uint32_t starts[], int maxStarts) const {
 }
 
 // =================================================================================================
-// Main Drawing Functions
+// Main Drawing Function
 // =================================================================================================
 
-void DataVisualizer::drawGrid(int rx, int ry, int rw, int rh) {
-    for (int i=0;i<=4;i++){ tft.drawFastHLine(ry + (i*rh)/4, rx, rw, 0x0821); tft.drawFastVLine(rx + (i*rw)/4, ry, rh, 0x0821);}
-}
+void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs) {
+    if (rw <= 0 || rh <= 0) return;
 
-void DataVisualizer::drawMarkers(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd) {
+    uint32_t wEnd = windowEndAbs;
+    uint32_t wStart = (windowDurationMs == 0 || windowDurationMs > wEnd) ? 0u : (wEnd - windowDurationMs);
+    uint32_t compressedEnd = getCompressedEndAbs();
+
+    float vmin, vmax;
+    computeWindowMinMaxDirect(wStart, wEnd, vmin, vmax);
+
+    tft.fillRect(rx, ry, rw, rh, TFT_BLACK);
+    for (int i=0;i<=4;i++){ tft.drawFastHLine(rx, ry + (i*rh)/4, rw, 0x0821); tft.drawFastVLine(rx + (i*rw)/4, ry, rh, 0x0821);}
+
     auto tsToX = [&](uint32_t ts) {
         if (wEnd == wStart) return rx;
         double f = double(ts - wStart) / double(wEnd - wStart);
         return rx + (int)round(f * (rw - 1));
     };
 
-    uint32_t compressedEnd = getCompressedEndAbs();
+    auto valueToY = [&](double val) {
+        double c = val;
+        if (c < vmin) c = vmin; if (c > vmax) c = vmax;
+        return ry + (int)round((1.0 - (c - vmin) / (vmax - vmin)) * (rh - 1));
+    };
 
     if (wEnd > compressedEnd) {
         int xStart = tsToX(compressedEnd);
@@ -155,24 +191,8 @@ void DataVisualizer::drawMarkers(int rx, int ry, int rw, int rh, uint32_t wStart
         int xb = tsToX(compressedEnd);
         tft.drawFastVLine(xb, ry, rh, TFT_MAGENTA);
     }
-}
 
-void DataVisualizer::drawPolynomials(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd, float vmin, float vmax) {
-    auto tsToX = [&](uint32_t ts) {
-        if (wEnd == wStart) return rx;
-        double f = double(ts - wStart) / double(wEnd - wStart);
-        return rx + (int)round(f * (rw - 1));
-    };
-
-    auto valueToY = [&](double val) {
-        double c = val;
-        if (c < vmin) c = vmin; if (c > vmax) c = vmax;
-        return ry + (int)round((1.0 - (c - vmin) / (vmax - vmin)) * (rh - 1));
-    };
-
-    uint32_t compressedEnd = getCompressedEndAbs();
     uint16_t colors[] = {TFT_YELLOW, TFT_GREEN};
-
     for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
         if (compressor.getSegmentCount() > 0) {
             int lastY = -1;
@@ -189,82 +209,23 @@ void DataVisualizer::drawPolynomials(int rx, int ry, int rw, int rh, uint32_t wS
                 lastY = y;
             }
         }
-    }
-}
 
-void DataVisualizer::drawRawData(int rx, int ry, int rw, int rh, uint32_t wStart, uint32_t wEnd, float vmin, float vmax, bool full) {
-    auto tsToX = [&](uint32_t ts) {
-        if (wEnd == wStart) return rx;
-        double f = double(ts - wStart) / double(wEnd - wStart);
-        return rx + (int)round(f * (rw - 1));
-    };
-
-    auto valueToY = [&](double val) {
-        double c = val;
-        if (c < vmin) c = vmin; if (c > vmax) c = vmax;
-        return ry + (int)round((1.0 - (c - vmin) / (vmax - vmin)) * (rh - 1));
-    };
-
-    uint32_t compressedEnd = getCompressedEndAbs();
-    uint16_t colors[] = {TFT_YELLOW, TFT_GREEN};
-
-    for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
-        if (rawDataIndex > 0) {
+        const uint16_t dataIndex = compressor.getDataIndex();
+        if (dataIndex > 0) {
+            const float* rawData = compressor.getRawDataBuffer();
+            const uint32_t* timestamps = compressor.getTimestampsBuffer();
             int prevX = -1, prevY = -1;
-            for (uint16_t i = 0; i < rawDataIndex; ++i) {
-                uint32_t t = rawTimestamps[i];
-
-                if (!full && t < compressedEnd) {
-                    prevX = -1;
-                    continue;
-                }
-
+            for (uint16_t i = 0; i < dataIndex; ++i) {
+                uint32_t t = timestamps[i];
                 if (t < wStart || t > wEnd) continue;
-
                 int x = tsToX(t);
-                int y = valueToY(rawData[i][series]);
-
-                if (prevX != -1) {
-                    tft.drawLine(prevX, prevY, x, y, colors[series]);
-                } else {
-                    tft.drawPixel(x, y, colors[series]);
-                }
+                int y = valueToY(rawData[i * NUM_DATA_SERIES + series]);
+                tft.drawPixel(x, y, colors[series]);
+                if (prevX >= 0) tft.drawLine(prevX, prevY, x, y, colors[series]);
                 prevX = x; prevY = y;
             }
         }
     }
-}
 
-void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs) {
-    if (rw <= 0 || rh <= 0) return;
-
-    uint32_t wEnd = windowEndAbs;
-    uint32_t wStart = (windowDurationMs == 0 || windowDurationMs > wEnd) ? 0u : (wEnd - windowDurationMs);
-
-    float vmin, vmax;
-    computeWindowMinMaxDirect(wStart, wEnd, vmin, vmax);
-
-    tft.fillRect(rx, ry, rw, rh, TFT_BLACK);
-    drawGrid(rx, ry, rw, rh);
-    drawMarkers(rx, ry, rw, rh, wStart, wEnd);
-    drawPolynomials(rx, ry, rw, rh, wStart, wEnd, vmin, vmax);
-    drawRawData(rx, ry, rw, rh, wStart, wEnd, vmin, vmax, true); // 'true' for full raw data
-    tft.drawRect(rx, ry, rw, rh, TFT_WHITE);
-}
-
-void DataVisualizer::drawCombinedGraph(int rx, int ry, int rw, int rh, uint32_t windowEndAbs, uint32_t windowDurationMs) {
-    if (rw <= 0 || rh <= 0) return;
-
-    uint32_t wEnd = windowEndAbs;
-    uint32_t wStart = (windowDurationMs == 0 || windowDurationMs > wEnd) ? 0u : (wEnd - windowDurationMs);
-
-    float vmin, vmax;
-    computeWindowMinMaxDirect(wStart, wEnd, vmin, vmax);
-
-    tft.fillRect(rx, ry, rw, rh, TFT_BLACK);
-    drawGrid(rx, ry, rw, rh);
-    drawMarkers(rx, ry, rw, rh, wStart, wEnd);
-    drawPolynomials(rx, ry, rw, rh, wStart, wEnd, vmin, vmax);
-    drawRawData(rx, ry, rw, rh, wStart, wEnd, vmin, vmax, false); // 'false' for uncompressed raw data only
     tft.drawRect(rx, ry, rw, rh, TFT_WHITE);
 }

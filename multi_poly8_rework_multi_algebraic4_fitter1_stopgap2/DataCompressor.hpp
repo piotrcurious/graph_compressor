@@ -70,6 +70,9 @@ public:
     uint16_t getCurrentPolyIndex() const { return currentPolyIndex; }
     uint32_t getRawLogDelta() const { return raw_log_delta; }
     uint32_t getLastTimestamp() const { return lastTimestamp; }
+    const float* getRawDataBuffer() const { return &rawDataBuffer[0][0]; }
+    const uint32_t* getTimestampsBuffer() const { return timestampsBuffer; }
+    uint16_t getDataIndex() const { return dataIndex; }
 
 
 private:
