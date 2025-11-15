@@ -192,8 +192,10 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
 
     uint16_t colors[] = {TFT_YELLOW, TFT_GREEN};
     for (uint8_t series = 0; series < NUM_DATA_SERIES; ++series) {
+        int lastX = -1, lastY = -1;
+
+        // Draw compressed data
         if (compressor.getSegmentCount() > 0) {
-            int lastY = -1;
             int compressedRightX = tsToX(min(wEnd, compressedEnd));
             for (int px = 0; px <= compressedRightX - rx; ++px) {
                 uint32_t ts = wStart + (uint64_t)px * (uint64_t)(wEnd - wStart) / (uint32_t)max(1, rw - 1);
@@ -204,23 +206,36 @@ void DataVisualizer::drawCompoundGraph(int rx, int ry, int rw, int rh, uint32_t 
                 int y = valueToY(v);
                 if (lastY >= 0) tft.drawLine(x - 1, lastY, x, y, colors[series]);
                 else tft.drawPixel(x, y, colors[series]);
-                lastY = y;
+                lastX = x; lastY = y;
             }
         }
 
+        // Draw uncompressed data
         const uint16_t dataIndex = compressor.getDataIndex();
         if (dataIndex > 0) {
             const float* rawData = compressor.getRawDataBuffer();
             const uint32_t* timestamps = compressor.getTimestampsBuffer();
-            int prevX = -1, prevY = -1;
+
+            // Connect compressed to raw data
+            if (lastX != -1) {
+                uint32_t t = timestamps[0];
+                if (t >= wStart && t <= wEnd) {
+                    int x = tsToX(t);
+                    int y = valueToY(rawData[series]);
+                    tft.drawLine(lastX, lastY, x, y, colors[series]);
+                    lastX = x; lastY = y;
+                }
+            }
+
+            // Draw the rest of the raw data
             for (uint16_t i = 0; i < dataIndex; ++i) {
                 uint32_t t = timestamps[i];
                 if (t < wStart || t > wEnd) continue;
                 int x = tsToX(t);
                 int y = valueToY(rawData[i * NUM_DATA_SERIES + series]);
-                tft.drawPixel(x, y, colors[series]);
-                if (prevX >= 0) tft.drawLine(prevX, prevY, x, y, colors[series]);
-                prevX = x; prevY = y;
+                if (lastX != -1) tft.drawLine(lastX, lastY, x, y, colors[series]);
+                else tft.drawPixel(x, y, colors[series]);
+                lastX = x; lastY = y;
             }
         }
     }
