@@ -22,9 +22,7 @@ inline double DataVisualizer::evaluatePolynomialNormalized(const float* coeffici
 }
 
 uint32_t DataVisualizer::getCompressedEndAbs() const {
-    const uint32_t* timestamps = compressor.getTimestampsBuffer();
-    const uint16_t dataIndex = compressor.getDataIndex();
-    return (dataIndex > 0) ? (timestamps[dataIndex - 1] - compressor.getRawLogDelta()) : 0u;
+    return compressor.getLastTimestamp() - compressor.getRawLogDelta();
 }
 
 bool DataVisualizer::rawInterpolatedValueAt(uint32_t timestamp, uint8_t seriesIndex, double &outValue) const {
