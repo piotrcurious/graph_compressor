@@ -1586,7 +1586,6 @@ std::vector<float> AdvancedPolynomialFitter::fitPolynomialLebesgueL2_AnalyticPro
 }
 
 
-
 // ----------------- Segmented polynomials (double-x wrapper) -----------------
 std::vector<float> AdvancedPolynomialFitter::fitSegmentedPolynomials(const std::vector<float>& x,
                                                                      const std::vector<float>& y,
