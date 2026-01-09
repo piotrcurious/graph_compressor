@@ -251,8 +251,7 @@ void DataCompressor::compressDataToSegment(uint8_t seriesIndex, const uint32_t* 
         std::vector<float> fitted_abs = fitter.fitPolynomialD_lowmem(absTimes, values, POLY_DEGREE, 0.0);
 #else
 //        std::vector<float> fitted_abs = fitter.fitPolynomialD_superpos5c(absTimes, values, POLY_DEGREE, AdvancedPolynomialFitter::NONE);
-        std::vector<float> fitted_abs = fitter.fitPolynomialLebesgueL2_AnalyticProjection(absTimes, values, SUB_FIT_POLY_DEGREE, AdvancedPolynomialFitter::NONE);
-
+        std::vector<float> fitted_abs = fitter.fitPolynomialLebesgueL2_AnalyticProjection(absTimes, values, POLY_DEGREE, AdvancedPolynomialFitter::NONE);
 #endif
         std::vector<float> fitted_norm = convertAbsToNormalized(fitted_abs);
         for (size_t k = 0; k < fitted_norm.size() && k < (POLY_DEGREE + 1); ++k) {
